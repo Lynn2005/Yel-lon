@@ -610,7 +610,7 @@ if job_id:
                                      key=f"{job_id}_edit_logo_upload")
         if st.button("💾 Save subtitle edits", key=f"{job_id}_save_srt_edits", use_container_width=True):
             if edited_srt_text.strip():
-                edit_srt_path.write_text(edited_srt_text.strip() + "\\n", encoding="utf-8")
+                edit_srt_path.write_text(edited_srt_text.strip() + "\n", encoding="utf-8")
                 st.success("စာတန်းပြင်ဆင်ချက် သိမ်းပြီးပါပြီ။")
                 st.rerun()
             else:
