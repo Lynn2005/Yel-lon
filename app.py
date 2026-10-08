@@ -391,7 +391,7 @@ def render_video(video, voice, srt, output, ratio, subtitle_on, bgm_on=False,
             "Center": "(W-w)/2:(H-h)/2",
         }
         pos = positions.get(logo_position, "W-w-20:20")
-        graph.append(f"[{current}][{logo_index}:v]scale2ref=w=main_w*{max(5, min(50, int(logo_size)))}/100:h=-1[logo][ref]")
+        graph.append(f"[{logo_index}:v][{current}]scale2ref=w=main_w*{max(5, min(50, int(logo_size)))}/100:h=-1[logo][ref]")
         graph.append(f"[ref][logo]overlay={pos}[withlogo]")
         current = "withlogo"
 
