@@ -51,6 +51,13 @@ class HelperFunctionTests(unittest.TestCase):
 
 
 class ApiKeyPersistenceRegressionTests(unittest.TestCase):
+
+    def test_gemini_uses_current_model_ids_not_shutdown_gemini_2(self):
+        self.assertIn('model="gemini-3.8-flash"', APP_SOURCE)
+        self.assertIn('"gemini-3.7-flash"', APP_SOURCE)
+        self.assertIn('"gemini-3.5-flash-lite"', APP_SOURCE)
+        self.assertNotIn("gemini-2.0-flash", APP_SOURCE)
+        self.assertNotIn("gemini-2.5-flash", APP_SOURCE)
     def test_reads_use_supported_getitem_signature(self):
         self.assertIn('local_storage.getItem("yel_lon_groq_api_key")', APP_SOURCE)
         self.assertIn('local_storage.getItem("yel_lon_gemini_api_key")', APP_SOURCE)
