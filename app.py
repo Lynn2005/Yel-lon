@@ -159,7 +159,7 @@ def gemini_text(prompt, key, model="gemini-3.8-flash"):
                 r = requests.post(
                     f"https://generativelanguage.googleapis.com/v1beta/models/{chosen}:generateContent",
                     headers={"x-goog-api-key": key, "Content-Type": "application/json"},
-                    json={"contents": [{"parts": [{"text": prompt}]}],}
+                    json={"contents": [{"parts": [{"text": prompt}]}]},
                     timeout=180)
                 if r.status_code in (429, 500, 502, 503, 504) and attempt < 2:
                     time.sleep(1.5 * (attempt + 1))
