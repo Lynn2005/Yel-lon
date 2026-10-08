@@ -201,7 +201,37 @@ def split_chunks(text, limit=7000):
         chunks.append(current)
     return chunks
 
-def translate_burmese(transcript, key, model):
+def translate_burmese(transcript_data, key, model):
+    segments = transcript_data.get("segments", [])
+    if not segments:
+        text = translate_burmese_text(transcript_data.get("text", ""), key, model)
+        return text, []
+    translated_segments = []
+    # Translate batches while preserving the original timestamps for a usable Burmese SRT.
+    batch_size = 35
+    for start in range(0, len(segments), batch_size):
+        batch = segments[start:start + batch_size]
+        payload = [{"id": i + 1, "text": str(s.get("text", "")).strip()} for i, s in enumerate(batch)]
+        prompt = ("Translate each movie dialogue segment into natural spoken Myanmar Burmese. "
+                  "Return ONLY valid JSON array with objects {id,text}; keep every id exactly, "
+                  "preserve names and meaning, do not merge segments, omit nothing, and do not add commentary.\n"
+                  + json.dumps(payload, ensure_ascii=False))
+        raw = gemini_text(prompt, key, model)
+        try:
+            match = re.search(r"\[.*\]", raw, re.S)
+            values = json.loads(match.group(0) if match else raw)
+            mapping = {int(x["id"]): str(x["text"]).strip() for x in values}
+        except Exception:
+            # Repair malformed JSON by translating the batch as plain text.
+            plain = gemini_text("Translate this movie transcript into natural Myanmar Burmese. Return only translation.\n\n" +
+                                "\n".join(x["text"] for x in payload), key, model).splitlines()
+            mapping = {x["id"]: (plain[i] if i < len(plain) else x["text"]) for i, x in enumerate(payload)}
+        for i, seg in enumerate(batch, start + 1):
+            translated_segments.append({"start": float(seg.get("start", 0)), "end": float(seg.get("end", 0)),
+                                        "text": mapping.get(i, str(seg.get("text", "")).strip())})
+    return "\n".join(x["text"] for x in translated_segments), translated_segments
+
+def translate_burmese_text(transcript, key, model):
     chunks = split_chunks(transcript, 7000)
     translated = []
     for i, chunk in enumerate(chunks, 1):
@@ -434,9 +464,17 @@ if start:
             completed.append("original_srt")
             stage("translation", 40, "Translating dialogue into Burmese")
             translation_path = job / "burmese_translation.txt"
-            if not translation_path.exists():
-                translation_path.write_text(translate_burmese(transcript, gemini_key, model), encoding="utf-8")
-            translation = translation_path.read_text(encoding="utf-8")
+            translated_json_path = job / "burmese_segments.json"
+            if not translation_path.exists() or not translated_json_path.exists():
+                translation, translated_segments = translate_burmese(data, gemini_key, model)
+                translation_path.write_text(translation, encoding="utf-8")
+                save_json(translated_json_path, translated_segments)
+            else:
+                translation = translation_path.read_text(encoding="utf-8")
+                translated_segments = read_json(translated_json_path, [])
+            burmese_srt_path = job / "burmese.srt"
+            if translated_segments and not burmese_srt_path.exists():
+                burmese_srt_path.write_text(make_srt(translated_segments), encoding="utf-8")
             completed.append("translation")
             stage("recap", 50, "Understanding story and writing recap")
             recap_path = job / "recap.txt"
@@ -509,6 +547,7 @@ if job_id:
             ("Original Transcript", "transcript.txt", "text/plain"),
             ("Original SRT", "original.srt", "application/x-subrip"),
             ("Burmese Translation", "burmese_translation.txt", "text/plain"),
+            ("Burmese SRT", "burmese.srt", "application/x-subrip"),
             ("Recap Script", "recap.txt", "text/plain"),
             ("Recap SRT", "recap.srt", "application/x-subrip"),
             ("AI Voice", "voice_full.mp3", "audio/mpeg"),
