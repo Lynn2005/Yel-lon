@@ -485,6 +485,19 @@ if video_file:
 
 if "current_job" not in st.session_state:
     st.session_state.current_job = ""
+# Restore the most recent job after a browser refresh / Streamlit session reset.
+# The editor was hidden because current_job only lived in session_state.
+if not st.session_state.current_job:
+    try:
+        recoverable_jobs = sorted(
+            (p for p in ROOT.iterdir() if p.is_dir() and (p / "metadata.json").exists()),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        if recoverable_jobs:
+            st.session_state.current_job = recoverable_jobs[0].name
+    except OSError:
+        pass
 if "job_error" not in st.session_state:
     st.session_state.job_error = ""
 
@@ -682,7 +695,7 @@ if job_id:
 
         if st.button("💾 Save subtitle edits", key=f"{job_id}_save_srt_edits", use_container_width=True):
             if edited_srt_text.strip():
-                edit_srt_path.write_text(edited_srt_text.strip() + "\\n", encoding="utf-8")
+                edit_srt_path.write_text(edited_srt_text.strip() + "\n", encoding="utf-8")
                 st.success("စာတန်းပြင်ဆင်ချက် သိမ်းပြီးပါပြီ။")
                 st.rerun()
             else:
@@ -691,7 +704,7 @@ if job_id:
                      key=f"{job_id}_render_edits", use_container_width=True):
             try:
                 if edited_srt_text.strip() and edit_srt_path.exists():
-                    edit_srt_path.write_text(edited_srt_text.strip() + "\\n", encoding="utf-8")
+                    edit_srt_path.write_text(edited_srt_text.strip() + "\n", encoding="utf-8")
                 logo_path = None
                 if logo_on and logo_file is not None:
                     logo_path = job / "custom_logo.png"
