@@ -211,7 +211,7 @@ def translate_burmese(transcript_data, key, model):
     batch_size = 35
     for start in range(0, len(segments), batch_size):
         batch = segments[start:start + batch_size]
-        payload = [{"id": i + 1, "text": str(s.get("text", "")).strip()} for i, s in enumerate(batch)]
+        payload = [{"id": start + i + 1, "text": str(s.get("text", "")).strip()} for i, s in enumerate(batch)]
         prompt = ("Translate each movie dialogue segment into natural spoken Myanmar Burmese. "
                   "Return ONLY valid JSON array with objects {id,text}; keep every id exactly, "
                   "preserve names and meaning, do not merge segments, omit nothing, and do not add commentary.\n"
