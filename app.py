@@ -584,6 +584,60 @@ if job_id:
             st.progress(min(100, int(status.get("progress", 0))) / 100, text=f"{status.get('progress', 0)}% · {status.get('message', '')}")
             st.caption(f"Job ID: {job_id} · Status: {status.get('status', 'unknown')}")
         final_path = job / "final.mp4"
+        edit_srt_path = job / "recap.srt"
+        st.markdown("## 🎛️ Live Edit Studio")
+        st.caption("စာတန်းကို တိုက်ရိုက်ပြင်၊ Blur / Mirror / Logo ထည့်ပြီး Preview ထုတ်နိုင်ပါတယ်။")
+        if edit_srt_path.exists():
+            current_srt = edit_srt_path.read_text(encoding="utf-8")
+            edited_srt_text = st.text_area(
+                "📝 Subtitle Live Edit (SRT format)", value=current_srt,
+                height=260, key=f"{job_id}_live_srt_editor",
+                help="စာသားနဲ့ timestamp ကို SRT format အတိုင်း ပြင်ပါ။"
+            )
+        else:
+            edited_srt_text = ""
+            st.info("Recap SRT မရှိသေးပါ။ Recap ထုတ်ပြီးမှ စာတန်းပြင်နိုင်ပါတယ်။")
+        edit_a, edit_b = st.columns(2)
+        with edit_a:
+            edit_subtitle_on = st.toggle("စာတန်းထိုး ဖွင့်ထားမယ်", value=True, key=f"{job_id}_edit_subtitle")
+            blur_strength = st.slider("🌫️ Blur အား", min_value=0, max_value=20, value=0,
+                                      help="0 = Blur မလုပ်ပါ", key=f"{job_id}_edit_blur")
+        with edit_b:
+            mirror_on = st.toggle("🪞 Mirror (ဘယ်/ညာလှန်)", value=False, key=f"{job_id}_edit_mirror")
+            logo_position = st.selectbox("🏷️ Logo နေရာ", ["Top right", "Top left", "Bottom right", "Bottom left", "Center"],
+                                         key=f"{job_id}_edit_logo_position")
+        logo_file = st.file_uploader("Logo ထည့်ရန် (PNG/JPG, optional)", type=["png", "jpg", "jpeg"],
+                                     key=f"{job_id}_edit_logo_upload")
+        if st.button("💾 Save subtitle edits", key=f"{job_id}_save_srt_edits", use_container_width=True):
+            if edited_srt_text.strip():
+                edit_srt_path.write_text(edited_srt_text.strip() + "\\n", encoding="utf-8")
+                st.success("စာတန်းပြင်ဆင်ချက် သိမ်းပြီးပါပြီ။")
+                st.rerun()
+            else:
+                st.error("SRT စာသားအလွတ် မဖြစ်ရပါ။")
+        if st.button("🎬 Apply edits & render preview", type="primary",
+                     key=f"{job_id}_render_edits", use_container_width=True):
+            try:
+                if edited_srt_text.strip() and edit_srt_path.exists():
+                    edit_srt_path.write_text(edited_srt_text.strip() + "\\n", encoding="utf-8")
+                logo_path = None
+                if logo_file is not None:
+                    logo_path = job / "custom_logo.png"
+                    logo_path.write_bytes(logo_file.getvalue())
+                edited_output = job / "final_edited.mp4"
+                with st.spinner("Applying edits and rendering preview..."):
+                    render_video(job / next(p.name for p in job.iterdir() if p.name.startswith("input") and p.is_file()),
+                                 job / "voice_full.mp3", edit_srt_path, edited_output, ratio,
+                                 edit_subtitle_on, blur_strength=blur_strength, mirror=mirror_on,
+                                 logo_path=logo_path, logo_position=logo_position)
+                    validate_final(edited_output)
+                st.success("Live Edit preview ready!")
+                st.video(edited_output.read_bytes())
+                st.download_button("⬇️ Download edited MP4", edited_output.read_bytes(),
+                                   "final_edited.mp4", "video/mp4", key=f"{job_id}_download_edited")
+            except Exception as e:
+                st.error("Live Edit မအောင်မြင်ပါ။")
+                st.code(str(e)[:1200])
         if final_path.exists() and final_path.stat().st_size:
             st.success("✅ RECAP COMPLETE")
             st.video(final_path.read_bytes())
