@@ -1,172 +1,523 @@
-import os, io, re, json, shutil, subprocess, tempfile, zipfile
+import os
+import re
+import json
+import time
+import shutil
+import hashlib
+import subprocess
+import tempfile
+import asyncio
 from pathlib import Path
-import streamlit as st
+from datetime import datetime
 import requests
+import streamlit as st
 
-st.set_page_config(page_title="Lynn Recap", page_icon="🎬", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Lynn Recap · One Click", page_icon="🎬", layout="wide")
 st.markdown("""
 <style>
 :root{color-scheme:dark}
 .stApp{background:radial-gradient(ellipse at 85% 0%,#1c2b50 0,transparent 38%),#090d18;color:#f5f7ff}
-.block-container{max-width:1200px;padding-top:1.5rem}
+.block-container{max-width:1100px;padding-top:1.2rem;padding-bottom:3rem}
 section[data-testid="stSidebar"]{background:#101728}
-div[data-testid="stMetric"],div[data-testid="stFileUploader"]{background:#111a2b;border:1px solid #293752;border-radius:16px;padding:14px}
-.stButton>button{border-radius:12px;min-height:44px;font-weight:700}
+div[data-testid="stFileUploader"]{background:#111a2b;border:1px solid #293752;border-radius:16px;padding:12px}
+.stButton>button,.stDownloadButton>button{border-radius:12px;min-height:46px;font-weight:700}
 h1,h2,h3{letter-spacing:-.4px}
+div[data-testid="stProgress"]>div>div{background:linear-gradient(90deg,#5b8cff,#8c5bff)}
 .small-note{color:#93a2bb;font-size:.9rem}
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🎬 Lynn Recap")
-st.caption("Movie Recap Studio · Upload → Transcript → Recap → Voice → MP4")
-with st.sidebar:
-    st.header("🔑 API Settings")
-    groq_key = st.text_input("Groq API Key", type="password", help="Whisper transcript အတွက် Groq API key")
-    gemini_key = st.text_input("Gemini API Key", type="password", help="မြန်မာ recap script အတွက် Gemini API key")
-    st.caption("Key များကို ဒီ app ထဲမှာ အမြဲတမ်းသိမ်းမထားပါ။")
-    st.divider()
-    st.subheader("⚙️ Output Settings")
-    recap_length = st.selectbox("Recap အရှည်", ["Short (1–3 min)", "Medium (3–5 min)", "Long (5–10 min)"], index=1)
-    voice_speed = st.select_slider("Voice speed", options=["0.85", "0.95", "1.0", "1.1", "1.2"], value="1.0")
-    ratio = st.selectbox("Video ratio", ["9:16 · Reels/TikTok", "16:9 · YouTube", "1:1 · Square"])
-    subtitle_mode = st.selectbox("Subtitle", ["Burn into video", "SRT file only", "No subtitles"])
-    st.caption("အသုံးပြုမှုအတွက် Groq / Gemini API key လိုအပ်နိုင်ပါတယ်။")
+ROOT = Path("jobs")
+ROOT.mkdir(exist_ok=True)
+STEPS = [
+    (5, "Validating video", "validation"),
+    (10, "Extracting audio", "audio"),
+    (20, "Transcribing movie", "transcript"),
+    (30, "Creating original SRT", "original_srt"),
+    (40, "Translating into Burmese", "translation"),
+    (50, "Understanding story and writing recap", "recap"),
+    (60, "Creating recap subtitles", "recap_srt"),
+    (70, "Generating AI voice", "voice"),
+    (80, "Syncing voice and subtitles", "sync"),
+    (90, "Rendering final video", "render"),
+    (98, "Validating final output", "final_validation"),
+]
 
-def run_cmd(args):
-    p = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    if p.returncode != 0:
-        raise RuntimeError((p.stderr or "Command failed")[-2500:])
+def run_cmd(args, timeout=None):
+    p = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=timeout)
+    if p.returncode:
+        raise RuntimeError((p.stderr or "Processing command failed")[-1800:])
     return p.stdout
 
+def safe_name(name):
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", Path(name).name)[:120] or "movie.mp4"
+
+def save_json(path, data):
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+def read_json(path, default=None):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return default if default is not None else {}
+
+def update_status(job, step, progress, message, completed=None, state="processing"):
+    status = read_json(job / "status.json", {})
+    status.update({"jobId": job.name, "status": state, "step": step, "progress": progress,
+                   "message": message, "updatedAt": datetime.utcnow().isoformat() + "Z"})
+    if completed is not None:
+        status["completed"] = completed
+    save_json(job / "status.json", status)
+
 def srt_time(seconds):
-    ms=int(seconds*1000); h=ms//3600000; ms%=3600000; m=ms//60000; ms%=60000; s=ms//1000; ms%=1000
+    ms = max(0, int(round(float(seconds) * 1000)))
+    h, ms = divmod(ms, 3600000)
+    m, ms = divmod(ms, 60000)
+    s, ms = divmod(ms, 1000)
     return f"{h:02}:{m:02}:{s:02},{ms:03}"
 
-def transcript_to_srt(segments):
-    return "\n\n".join(f"{i+1}\n{srt_time(float(x.get('start',0)))} --> {srt_time(float(x.get('end',0)))}\n{x.get('text','').strip()}" for i,x in enumerate(segments))
+def make_srt(segments):
+    rows = []
+    last_end = 0.0
+    for i, seg in enumerate(segments, 1):
+        start = max(0.0, float(seg.get("start", 0)))
+        end = max(start + 0.15, float(seg.get("end", start + 1)))
+        # Correct invalid/overlapping timestamps instead of writing a broken SRT.
+        start = max(start, last_end)
+        end = max(end, start + 0.15)
+        text = str(seg.get("text", "")).strip()
+        if text:
+            rows.append(f"{len(rows)+1}\n{srt_time(start)} --> {srt_time(end)}\n{text}")
+            last_end = end
+    return "\n\n".join(rows) + ("\n" if rows else "")
 
-def groq_transcribe(file_path, key):
-    size=os.path.getsize(file_path)
-    if size > 24*1024*1024:
-        raise ValueError("Audio file is larger than 24 MB. Long videos need chunking, which this version does not yet do. Use a shorter video.")
-    with open(file_path,"rb") as f:
-        r=requests.post("https://api.groq.com/openai/v1/audio/transcriptions",
-          headers={"Authorization":f"Bearer {key}"},
-          files={"file":(Path(file_path).name,f,"audio/mpeg")},
-          data={"model":"whisper-large-v3-turbo","response_format":"verbose_json","timestamp_granularities[]":["segment"]},timeout=300)
-    if not r.ok: raise RuntimeError(f"Groq API error {r.status_code}: {r.text[:1000]}")
-    return r.json()
+def parse_video(path):
+    raw = run_cmd(["ffprobe", "-v", "error", "-show_streams", "-show_format", "-of", "json", str(path)])
+    data = json.loads(raw)
+    streams = data.get("streams", [])
+    video = next((s for s in streams if s.get("codec_type") == "video"), None)
+    audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
+    duration = float(data.get("format", {}).get("duration") or 0)
+    if not video or duration <= 0:
+        raise ValueError("Video file could not be processed.")
+    if not audio:
+        raise ValueError("This video has no readable audio track.")
+    return {"duration": duration, "width": video.get("width"), "height": video.get("height"),
+            "fps": video.get("r_frame_rate"), "videoCodec": video.get("codec_name"),
+            "audioCodec": audio.get("codec_name"), "size": path.stat().st_size,
+            "audioAvailable": True}
 
-def gemini_recap(text, key, length):
-    words={"Short (1–3 min)":"400–600 words","Medium (3–5 min)":"700–1000 words","Long (5–10 min)":"1200–1800 words"}[length]
-    prompt=f"""You are an expert Burmese movie recap writer. Based only on the transcript below, write a natural, engaging Myanmar (Burmese) language movie recap script of {words}. Keep the plot in chronological order, preserve character names when known, do not invent scenes, do not include headings or notes, and write conversational narration suitable for voice-over. Transcript may be incomplete; don't make unsupported claims.\n\nTRANSCRIPT:\n{text[:65000]}"""
-    models=["gemini-2.5-flash","gemini-2.0-flash"]
-    errors=[]
-    for model in models:
-        try:
-            r=requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}",
-              json={"contents":[{"parts":[{"text":prompt}]}],"generationConfig":{"temperature":0.65}},timeout=120)
-            if r.ok:
-                data=r.json()
-                return data["candidates"][0]["content"]["parts"][0]["text"]
-            errors.append(f"{model}: {r.status_code} {r.text[:300]}")
-        except Exception as e: errors.append(str(e))
-    raise RuntimeError("Gemini request failed. " + " | ".join(errors))
+def extract_audio(video, out):
+    run_cmd(["ffmpeg", "-y", "-v", "error", "-i", str(video), "-map", "0:a:0",
+             "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(out)], timeout=1800)
+    if not out.exists() or out.stat().st_size == 0:
+        raise RuntimeError("Audio extraction returned an empty file.")
 
-def edge_voice(text, out_path, speed):
-    import asyncio, edge_tts
-    async def make():
-        rate=f"{int((float(speed)-1)*100):+d}%"
-        await edge_tts.Communicate(text, "my-MM-NilarNeural", rate=rate).save(out_path)
-    asyncio.run(make())
+def groq_transcribe(audio, key, model="whisper-large-v3-turbo"):
+    # Groq's transcription upload limit requires chunking long audio.
+    size = audio.stat().st_size
+    max_bytes = 24 * 1024 * 1024
+    chunks = []
+    if size <= max_bytes:
+        chunks = [audio]
+    else:
+        duration = float(run_cmd(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                                  "-of", "default=noprint_wrappers=1:nokey=1", str(audio)]).strip())
+        chunk_seconds = max(120, int(duration * max_bytes / size * 0.82))
+        pattern = audio.parent / "stt_chunk_%03d.mp3"
+        run_cmd(["ffmpeg", "-y", "-v", "error", "-i", str(audio), "-f", "segment",
+                 "-segment_time", str(chunk_seconds), "-c:a", "libmp3lame", "-b:a", "48k", str(pattern)], timeout=1800)
+        chunks = sorted(audio.parent.glob("stt_chunk_*.mp3"))
+    all_segments, full_text, offset = [], [], 0.0
+    for chunk in chunks:
+        payload = None
+        for attempt in range(3):
+            try:
+                with open(chunk, "rb") as f:
+                    r = requests.post("https://api.groq.com/openai/v1/audio/transcriptions",
+                        headers={"Authorization": f"Bearer {key}"},
+                        files={"file": (chunk.name, f)},
+                        data={"model": model, "response_format": "verbose_json", "timestamp_granularities[]": "segment"},
+                        timeout=600)
+                if r.status_code in (429, 500, 502, 503, 504):
+                    if attempt < 2:
+                        time.sleep(1.5 * (attempt + 1))
+                        continue
+                r.raise_for_status()
+                payload = r.json()
+                break
+            except Exception:
+                if attempt == 2:
+                    raise
+                time.sleep(1.5 * (attempt + 1))
+        if payload:
+            full_text.append(payload.get("text", ""))
+            for seg in payload.get("segments", []):
+                all_segments.append({"start": float(seg.get("start", 0)) + offset,
+                                     "end": float(seg.get("end", 0)) + offset,
+                                     "text": seg.get("text", "").strip()})
+            if len(chunks) > 1:
+                offset += float(run_cmd(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                                         "-of", "default=noprint_wrappers=1:nokey=1", str(chunk)]).strip())
+    return {"text": "\n".join(full_text).strip(), "segments": all_segments}
 
-def ffmpeg_render(video, audio, output, ratio):
-    vf=None
-    if ratio.startswith("9:16"): vf="scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280"
-    elif ratio.startswith("16:9"): vf="scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720"
-    elif ratio.startswith("1:1"): vf="scale=720:720:force_original_aspect_ratio=increase,crop=720:720"
-    cmd=["ffmpeg","-y","-i",video,"-i",audio,"-map","0:v:0","-map","1:a:0","-c:v","libx264","-preset","veryfast","-crf","23","-c:a","aac","-shortest"]
-    if vf: cmd += ["-vf",vf]
-    cmd += ["-movflags","+faststart",output]
-    run_cmd(cmd)
+def gemini_text(prompt, key, model="gemini-2.5-flash"):
+    models = [model, "gemini-2.0-flash"]
+    last_error = ""
+    for chosen in dict.fromkeys(models):
+        for attempt in range(3):
+            try:
+                r = requests.post(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{chosen}:generateContent",
+                    headers={"x-goog-api-key": key, "Content-Type": "application/json"},
+                    json={"contents": [{"parts": [{"text": prompt}]}],
+                          "generationConfig": {"temperature": 0.35}},
+                    timeout=180)
+                if r.status_code in (429, 500, 502, 503, 504) and attempt < 2:
+                    time.sleep(1.5 * (attempt + 1))
+                    continue
+                r.raise_for_status()
+                data = r.json()
+                return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+            except Exception as e:
+                last_error = str(e)
+                if attempt < 2:
+                    time.sleep(1.5 * (attempt + 1))
+                    continue
+                break
+    raise RuntimeError("AI text generation failed. Check API key, model access and quota. " + last_error[:300])
 
-st.markdown("### ① Movie Video Upload")
-video_file=st.file_uploader("Video file", type=["mp4","mov","mkv","webm"], help="Demo host တွင် video အရွယ်အစားနှင့် processing time ကန့်သတ်ချက်ရှိနိုင်ပါတယ်။")
-if video_file:
-    st.success(f"ရွေးထားသည်: {video_file.name} · {video_file.size/1024/1024:.1f} MB")
-    st.video(video_file)
-st.markdown("### ② Subtitle (Optional)")
-srt_file=st.file_uploader("ကိုယ်ပိုင် SRT ရှိလျှင် တင်နိုင်ပါတယ်",type=["srt","txt"])
-col1,col2=st.columns(2)
-with col1:
-    st.markdown("### ③ Transcript & Recap")
-    do_transcript=st.button("📝 Extract audio + Original SRT",use_container_width=True,disabled=not (video_file and groq_key))
-    do_recap=st.button("🇲🇲 Create Burmese recap script",use_container_width=True,disabled=not (groq_key and gemini_key))
-with col2:
-    st.markdown("### ④ Voice & Final Video")
-    voice_upload=st.file_uploader("ကိုယ်ပိုင် voice file (optional)",type=["mp3","wav","m4a"])
-    do_render=st.button("🎞️ Generate AI voice + Final MP4",use_container_width=True,disabled=not video_file)
+def split_chunks(text, limit=7000):
+    paras = re.split(r"(?<=[.!?။])\s+|\n+", text.strip())
+    chunks, current = [], ""
+    for para in paras:
+        if not para:
+            continue
+        if len(current) + len(para) + 1 > limit and current:
+            chunks.append(current)
+            current = ""
+        current = (current + " " + para).strip()
+    if current:
+        chunks.append(current)
+    return chunks
 
-if "transcript" not in st.session_state: st.session_state.transcript=""
-if "srt" not in st.session_state: st.session_state.srt=""
-if "recap" not in st.session_state: st.session_state.recap=""
+def translate_burmese(transcript, key, model):
+    chunks = split_chunks(transcript, 7000)
+    translated = []
+    for i, chunk in enumerate(chunks, 1):
+        prompt = ("Translate this movie dialogue transcript into natural spoken Myanmar Burmese. "
+                  "Preserve character names, meaning, story order, and every important detail. "
+                  "Do not summarize, invent events, add explanations, or omit dialogue. Return only Burmese translation.\n\n"
+                  f"CHUNK {i}/{len(chunks)}:\n{chunk}")
+        translated.append(gemini_text(prompt, key, model))
+    return "\n\n".join(translated)
 
-if do_transcript:
-    try:
-        if not shutil.which("ffmpeg"): raise RuntimeError("FFmpeg မတွေ့ပါ။ packages.txt ထည့်ထားပြီး Streamlit app ကို reboot လုပ်ကြည့်ပါ။")
-        with st.status("Audio ထုတ်ပြီး Transcript ဖန်တီးနေသည်…",expanded=True) as status:
-            with tempfile.TemporaryDirectory() as td:
-                vp=os.path.join(td,video_file.name)
-                with open(vp,"wb") as f:f.write(video_file.getbuffer())
-                ap=os.path.join(td,"audio.mp3")
-                run_cmd(["ffmpeg","-y","-i",vp,"-vn","-ac","1","-ar","16000","-b:a","64k",ap])
-                st.write("Audio extracted. Sending to Groq Whisper…")
-                data=groq_transcribe(ap,groq_key)
-                st.session_state.transcript=data.get("text","")
-                st.session_state.srt=transcript_to_srt(data.get("segments",[]))
-                status.update(label="Transcript ပြီးပါပြီ",state="complete")
-        st.success("Original transcript ready.")
-    except Exception as e: st.error(str(e))
+def generate_recap(transcript, translation, length, style, key, model):
+    word_targets = {"Auto": "choose a suitable length based on story complexity",
+                    "1–2 Minutes": "about 250–350 Burmese words",
+                    "3–5 Minutes": "about 500–800 Burmese words",
+                    "5–10 Minutes": "about 1000–1500 Burmese words",
+                    "10–15 Minutes": "about 1500–2200 Burmese words",
+                    "Custom": "a concise but complete recap"}
+    # Map-reduce summary avoids sending a full feature-length transcript in one request.
+    source = translation or transcript
+    chunks = split_chunks(source, 6500)
+    mini = []
+    for i, chunk in enumerate(chunks, 1):
+        mini.append(gemini_text(
+            "Summarize this section of a movie transcript in Burmese. Preserve events in order, character names, relationships, motives and reveals. Do not invent information. Return only the summary.\n"
+            f"SECTION {i}/{len(chunks)}:\n{chunk}", key, model))
+    master = "\n".join(mini)
+    prompt = (f"Write a natural Myanmar Burmese movie recap for voice narration, style: {style}; target: {word_targets[length]}. "
+              "Tell the story in chronological order: beginning, conflict, development, twist, climax and ending. "
+              "No unnecessary intro, repeated sentences, fake information, invented scenes, headings, markdown, emojis or stage directions. "
+              "Preserve consistent character names and include the actual ending supported by the source. Return only clean Burmese narration.\n\n"
+              f"ORIGINAL TRANSCRIPT EXCERPT:\n{transcript[:12000]}\n\n"
+              f"BURMESE TRANSLATION / CHUNK SUMMARIES:\n{master[:45000]}")
+    result = gemini_text(prompt, key, model)
+    return re.sub(r"[\*#\[\]<>]", "", result).strip()
 
-if st.session_state.transcript:
-    st.text_area("Original Transcript",key="transcript_edit",value=st.session_state.transcript,height=220)
-    st.download_button("⬇️ Download original transcript TXT",st.session_state.transcript.encode(),"original_transcript.txt","text/plain")
-if st.session_state.srt:
-    st.download_button("⬇️ Download original SRT",st.session_state.srt.encode(),"original_subtitles.srt","application/x-subrip")
-
-if do_recap:
-    try:
-        source=st.session_state.get("transcript_edit",st.session_state.transcript)
-        if not source: raise ValueError("အရင်ဆုံး Original Transcript ထုတ်ပေးပါ။")
-        with st.spinner("Gemini က မြန်မာ recap script ဖန်တီးနေသည်…"):
-            st.session_state.recap=gemini_recap(source,gemini_key,recap_length)
-        st.success("မြန်မာ recap script အဆင်သင့်ဖြစ်ပါပြီ။")
-    except Exception as e: st.error(str(e))
-if st.session_state.recap:
-    st.text_area("မြန်မာ Recap Script",value=st.session_state.recap,height=260,key="recap_edit")
-    st.download_button("⬇️ Download recap script",st.session_state.recap.encode(),"myanmar_recap.txt","text/plain")
-
-if do_render:
-    try:
-        recap=st.session_state.get("recap_edit",st.session_state.recap)
-        if not recap and not voice_upload: raise ValueError("အရင်ဆုံး မြန်မာ recap script ဖန်တီးပါ သို့မဟုတ် ကိုယ်ပိုင် voice တင်ပါ။")
-        if not shutil.which("ffmpeg"): raise RuntimeError("FFmpeg မတွေ့ပါ။")
-        with tempfile.TemporaryDirectory() as td:
-            vp=os.path.join(td,video_file.name)
-            with open(vp,"wb") as f:f.write(video_file.getbuffer())
-            ap=os.path.join(td,"voice.mp3")
-            if voice_upload:
-                with open(ap,"wb") as f:f.write(voice_upload.getbuffer())
+def make_recap_segments(script, chars=25):
+    # Split on sentence boundaries first; long sentences are wrapped at word boundaries.
+    sentences = [x.strip() for x in re.split(r"(?<=[။.!?])\s+|\n+", script) if x.strip()]
+    segments = []
+    for sentence in sentences:
+        words = sentence.split()
+        lines, line = [], ""
+        for word in words:
+            if len(line) + len(word) + (1 if line else 0) > chars and line:
+                lines.append(line)
+                line = word
             else:
-                if not recap: raise ValueError("Recap script မရှိပါ။")
-                with st.spinner("မြန်မာ AI Voice ထုတ်နေသည်…"): edge_voice(recap,ap,voice_speed)
-            out=os.path.join(td,"lynn_recap_final.mp4")
-            with st.spinner("Final video render လုပ်နေသည်…"): ffmpeg_render(vp,ap,out,ratio)
-            raw=Path(out).read_bytes()
-            st.success("Final MP4 အဆင်သင့်ဖြစ်ပါပြီ။")
-            st.video(raw)
-            st.download_button("⬇️ Download Final MP4",raw,"lynn_recap_final.mp4","video/mp4",use_container_width=True)
-    except Exception as e: st.error(str(e))
+                line = (line + " " + word).strip()
+        if line:
+            lines.append(line)
+        for j in range(0, len(lines), 2):
+            segments.append({"text": "\n".join(lines[j:j+2])})
+    return segments
+
+async def edge_chunk(text, path, voice, speed):
+    import edge_tts
+    rate = f"{int((float(speed) - 1) * 100):+d}%"
+    await edge_tts.Communicate(text, voice, rate=rate).save(str(path))
+
+def generate_voice(script, job, speed, voice):
+    voice_dir = job / "voice"
+    voice_dir.mkdir(exist_ok=True)
+    chunks = [x.strip() for x in re.split(r"(?<=[။.!?])\s+|\n+", script) if x.strip()]
+    if not chunks:
+        raise ValueError("Recap script is empty.")
+    made = []
+    for i, chunk in enumerate(chunks, 1):
+        out = voice_dir / f"segment_{i:04d}.mp3"
+        if not out.exists() or out.stat().st_size == 0:
+            try:
+                asyncio.run(edge_chunk(chunk, out, voice, speed))
+            except Exception:
+                # Retry the failed chunk only.
+                time.sleep(1)
+                asyncio.run(edge_chunk(chunk, out, voice, speed))
+        made.append(out)
+    concat_file = voice_dir / "concat.txt"
+    concat_file.write_text("".join(f"file '{p.resolve().as_posix()}'\n" for p in made), encoding="utf-8")
+    full = job / "voice_full.mp3"
+    run_cmd(["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", str(concat_file),
+             "-c:a", "libmp3lame", "-q:a", "3", str(full)], timeout=1800)
+    return full, chunks
+
+def create_timed_srt(chunks, voice_file, out, max_chars=25):
+    # Segment duration is measured from the generated audio, not estimated from text.
+    durations = []
+    for i in range(1, len(chunks) + 1):
+        p = voice_file.parent / "voice" / f"segment_{i:04d}.mp3"
+        d = float(run_cmd(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                           "-of", "default=noprint_wrappers=1:nokey=1", str(p)]).strip())
+        durations.append(max(0.2, d))
+    t, segments = 0.0, []
+    for text, duration in zip(chunks, durations):
+        # Reuse the generated sentence timing; 0.15 seconds of breathing space.
+        segments.append({"start": t, "end": t + duration, "text": text})
+        t += duration + 0.15
+    out.write_text(make_srt(segments), encoding="utf-8")
+
+def font_path():
+    candidates = [
+        "/usr/share/fonts/truetype/noto/NotoSansMyanmar-Regular.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSansMyanmar-VF.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSerifMyanmar-Regular.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    ]
+    return next((p for p in candidates if Path(p).exists()), None)
+
+def render_video(video, voice, srt, output, ratio, subtitle_on, bgm_on=False):
+    args = ["ffmpeg", "-y", "-i", str(video), "-i", str(voice)]
+    if bgm_on:
+        # No BGM file configured in the simple UI; do not fabricate one.
+        bgm_on = False
+    vf = []
+    if ratio == "9:16 · Reels/Shorts":
+        vf.append("scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280")
+    elif ratio == "16:9 · YouTube":
+        vf.append("scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2")
+    elif ratio == "1:1 · Square":
+        vf.append("scale=720:720:force_original_aspect_ratio=increase,crop=720:720")
+    if subtitle_on and srt and srt.exists():
+        # FFmpeg subtitles filter path escaping for Windows/Unix punctuation.
+        sub = str(srt.resolve()).replace("\\", "/").replace(":", r"\:").replace("'", r"\'")
+        font = font_path()
+        style = "FontSize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=36"
+        if font:
+            style += ",FontName=Noto Sans Myanmar"
+        vf.append(f"subtitles='{sub}':force_style='{style}'")
+    if vf:
+        args += ["-vf", ",".join(vf)]
+    args += ["-map", "0:v:0", "-map", "1:a:0", "-c:v", "libx264", "-preset", "veryfast",
+             "-crf", "23", "-c:a", "aac", "-b:a", "192k", "-af", "loudnorm=I=-16:TP=-1.5:LRA=11",
+             "-shortest", "-movflags", "+faststart", str(output)]
+    run_cmd(args, timeout=7200)
+
+def validate_final(path):
+    if not path.exists() or path.stat().st_size <= 0:
+        raise RuntimeError("Final rendering failed.")
+    info = json.loads(run_cmd(["ffprobe", "-v", "error", "-show_streams", "-show_format", "-of", "json", str(path)]))
+    streams = info.get("streams", [])
+    if not any(s.get("codec_type") == "video" for s in streams) or not any(s.get("codec_type") == "audio" for s in streams):
+        raise RuntimeError("Final rendering failed.")
+    if float(info.get("format", {}).get("duration") or 0) <= 0:
+        raise RuntimeError("Final rendering failed.")
+
+st.title("🎬 Lynn Recap")
+st.caption("AI Movie Recap Studio · Upload once, create a Burmese recap automatically.")
+with st.sidebar:
+    st.header("🔑 API Settings")
+    groq_key = st.text_input("Groq API Key", type="password", value=os.getenv("GROQ_API_KEY", ""))
+    gemini_key = st.text_input("Gemini API Key", type="password", value=os.getenv("GEMINI_API_KEY", ""))
+    st.caption("API keys ကို public GitHub code ထဲမထည့်ပါနှင့်။ Streamlit Secrets / environment variables သုံးရန် အကြံပြုသည်။")
+    st.divider()
+    st.subheader("⚙️ Recap Settings")
+    recap_length = st.selectbox("Recap Length", ["Auto", "1–2 Minutes", "3–5 Minutes", "5–10 Minutes", "10–15 Minutes", "Custom"], index=2)
+    recap_style = st.selectbox("Recap Style", ["Natural Storytelling", "Cinematic", "Suspense", "Casual", "Fast paced"])
+    voice_choice = st.selectbox("Voice", ["Natural Female", "Natural Male"])
+    voice_speed = st.select_slider("Voice Speed", options=["0.8", "0.9", "1.0", "1.1", "1.2"], value="1.0")
+    ratio = st.selectbox("Aspect Ratio", ["Original", "9:16 · Reels/Shorts", "16:9 · YouTube", "1:1 · Square"])
+    subtitle_on = st.toggle("Burn Burmese subtitles into video", value=True)
+    line_chars = st.selectbox("Subtitle characters per line", [20, 25, 30, 35], index=1)
+    model = st.selectbox("Gemini Model", ["gemini-2.5-flash", "gemini-2.0-flash"], index=0)
+    with st.expander("Advanced Settings"):
+        st.caption("STT: Groq Whisper · LLM: Gemini · TTS: Edge TTS fallback")
+        st.caption("FFmpeg/FFprobe are checked at runtime.")
+        st.caption("Streamlit Community Cloud storage is temporary; jobs can be lost after restart.")
+
+st.markdown("## 🎬 Upload Movie")
+video_file = st.file_uploader("Drop Movie Here or Choose Video", type=["mp4", "mkv", "mov", "webm", "avi"])
+if video_file:
+    st.success(f"Selected: {video_file.name} · {video_file.size / 1024 / 1024:.1f} MB")
+    st.video(video_file)
+
+if "current_job" not in st.session_state:
+    st.session_state.current_job = ""
+if "job_error" not in st.session_state:
+    st.session_state.job_error = ""
+
+start = st.button("🚀 ONE CLICK RECAP", type="primary", use_container_width=True,
+                  disabled=not (video_file and groq_key and gemini_key))
+if start:
+    if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+        st.error("FFmpeg/FFprobe မတွေ့ပါ။ packages.txt ကိုစစ်ပြီး app ကို reboot လုပ်ပါ။")
+    else:
+        digest = hashlib.sha256(video_file.getvalue()).hexdigest()[:12]
+        job_id = "job_" + datetime.utcnow().strftime("%Y%m%d_%H%M%S") + "_" + digest
+        job = ROOT / job_id
+        job.mkdir(parents=True, exist_ok=True)
+        st.session_state.current_job = job_id
+        st.session_state.job_error = ""
+        input_path = job / ("input" + (Path(safe_name(video_file.name)).suffix.lower() or ".mp4"))
+        if not input_path.exists():
+            input_path.write_bytes(video_file.getvalue())
+        settings = {"recapLength": recap_length, "style": recap_style, "voice": voice_choice,
+                    "speed": voice_speed, "ratio": ratio, "subtitles": subtitle_on, "lineChars": line_chars,
+                    "model": model, "videoHash": digest}
+        save_json(job / "metadata.json", {"jobId": job_id, "filename": safe_name(video_file.name), "settings": settings,
+                                          "createdAt": datetime.utcnow().isoformat() + "Z"})
+        completed = []
+        progress = st.progress(0, text="Starting job...")
+        current = st.empty()
+        try:
+            def stage(step, pct, message, artifact=None):
+                nonlocal_progress = pct
+                progress.progress(nonlocal_progress, text=f"{nonlocal_progress}% · {message}")
+                current.info(f"🎬 {message}")
+                update_status(job, step, pct, message, completed)
+            stage("validation", 5, "Validating video")
+            info = parse_video(input_path)
+            save_json(job / "video_info.json", info)
+            completed.append("validation")
+            stage("audio", 10, "Extracting and normalizing audio")
+            audio = job / "audio.wav"
+            if not audio.exists():
+                extract_audio(input_path, audio)
+            completed.append("audio")
+            stage("transcript", 20, "Transcribing movie with Whisper")
+            transcript_path = job / "transcript.txt"
+            transcript_json = job / "transcript.json"
+            if not transcript_json.exists():
+                data = groq_transcribe(audio, groq_key)
+                save_json(transcript_json, data)
+                transcript_path.write_text(data.get("text", ""), encoding="utf-8")
+            data = read_json(transcript_json)
+            transcript = transcript_path.read_text(encoding="utf-8") if transcript_path.exists() else data.get("text", "")
+            completed.append("transcript")
+            stage("original_srt", 30, "Creating original SRT")
+            original_srt = job / "original.srt"
+            if not original_srt.exists():
+                original_srt.write_text(make_srt(data.get("segments", [])), encoding="utf-8")
+            completed.append("original_srt")
+            stage("translation", 40, "Translating dialogue into Burmese")
+            translation_path = job / "burmese_translation.txt"
+            if not translation_path.exists():
+                translation_path.write_text(translate_burmese(transcript, gemini_key, model), encoding="utf-8")
+            translation = translation_path.read_text(encoding="utf-8")
+            completed.append("translation")
+            stage("recap", 50, "Understanding story and writing recap")
+            recap_path = job / "recap.txt"
+            if not recap_path.exists():
+                recap_path.write_text(generate_recap(transcript, translation, recap_length, recap_style, gemini_key, model), encoding="utf-8")
+            recap = recap_path.read_text(encoding="utf-8")
+            if not recap.strip():
+                raise RuntimeError("Recap script generation returned empty text.")
+            completed.append("recap")
+            stage("recap_srt", 60, "Creating recap subtitle segments")
+            recap_srt = job / "recap.srt"
+            # Final timed SRT is generated after actual TTS durations; this preliminary file is still useful for stage recovery.
+            if not recap_srt.exists():
+                prelim = []
+                t = 0.0
+                for seg in make_recap_segments(recap, line_chars):
+                    prelim.append({"start": t, "end": t + 3.5, "text": seg["text"]})
+                    t += 3.5
+                recap_srt.write_text(make_srt(prelim), encoding="utf-8")
+            completed.append("recap_srt")
+            stage("voice", 70, "Generating Burmese AI voice")
+            voice_file = job / "voice_full.mp3"
+            voice_name = "my-MM-NilarNeural" if voice_choice == "Natural Female" else "my-MM-ThihaNeural"
+            chunks_path = job / "voice_chunks.json"
+            if not voice_file.exists():
+                voice_file, voice_chunks = generate_voice(recap, job, voice_speed, voice_name)
+                save_json(chunks_path, voice_chunks)
+            else:
+                voice_chunks = read_json(chunks_path, [])
+                if not voice_chunks:
+                    voice_chunks = [x.strip() for x in re.split(r"(?<=[။.!?])\s+|\n+", recap) if x.strip()]
+            completed.append("voice")
+            stage("sync", 80, "Syncing subtitles to actual voice timing")
+            create_timed_srt(voice_chunks, voice_file, recap_srt, line_chars)
+            completed.append("sync")
+            stage("render", 90, "Rendering final MP4 with narration")
+            final_path = job / "final.mp4"
+            render_video(input_path, voice_file, recap_srt, final_path, ratio, subtitle_on)
+            completed.append("render")
+            stage("final_validation", 98, "Validating final video")
+            validate_final(final_path)
+            completed.append("final_validation")
+            update_status(job, "complete", 100, "Recap complete", completed, "complete")
+            progress.progress(100, text="100% · Complete")
+            current.success("✅ YOUR RECAP IS READY")
+        except Exception as e:
+            st.session_state.job_error = str(e)
+            update_status(job, "failed", int(read_json(job / "status.json", {}).get("progress", 0)),
+                          "Processing failed. Retry the failed step after checking settings.", completed, "failed")
+            st.error("❌ Processing failed. Completed files have been kept in this job folder.")
+            st.code(str(e)[:1800])
+            st.caption("Streamlit Community Cloud က restart ဖြစ်လျှင် local job files ပျောက်နိုင်သည်။ Long movies အတွက် persistent disk ပါသော host လိုနိုင်သည်။")
+
+job_id = st.session_state.current_job
+if job_id:
+    job = ROOT / job_id
+    if job.exists():
+        status = read_json(job / "status.json", {})
+        if status:
+            st.divider()
+            st.subheader("📊 Job Status")
+            st.progress(min(100, int(status.get("progress", 0))) / 100, text=f"{status.get('progress', 0)}% · {status.get('message', '')}")
+            st.caption(f"Job ID: {job_id} · Status: {status.get('status', 'unknown')}")
+        final_path = job / "final.mp4"
+        if final_path.exists() and final_path.stat().st_size:
+            st.success("✅ RECAP COMPLETE")
+            st.video(final_path.read_bytes())
+            st.download_button("🎬 DOWNLOAD FINAL MP4", final_path.read_bytes(), "final.mp4", "video/mp4", use_container_width=True)
+        download_files = [
+            ("Original Transcript", "transcript.txt", "text/plain"),
+            ("Original SRT", "original.srt", "application/x-subrip"),
+            ("Burmese Translation", "burmese_translation.txt", "text/plain"),
+            ("Recap Script", "recap.txt", "text/plain"),
+            ("Recap SRT", "recap.srt", "application/x-subrip"),
+            ("AI Voice", "voice_full.mp3", "audio/mpeg"),
+        ]
+        with st.expander("📥 Download files"):
+            for label, filename, mime in download_files:
+                p = job / filename
+                if p.exists() and p.stat().st_size:
+                    st.download_button(f"⬇️ {label}", p.read_bytes(), filename, mime, key=f"{job_id}_{filename}", use_container_width=True)
 
 st.divider()
-st.caption("Lynn Recap · API keys ကို public GitHub code ထဲ မထည့်ပါနှင့်။ ဒီ Streamlit session ထဲမှာသာ ထည့်သုံးပါ။")
+st.caption("Lynn Recap · API keys ကို public GitHub code ထဲ မထည့်ပါနှင့်။")
