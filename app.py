@@ -377,11 +377,13 @@ with st.sidebar:
     from streamlit_local_storage import LocalStorage
     local_storage = LocalStorage()
 
+    # Each browser-storage component needs its own stable Streamlit key.
+    # The value can be None on the first render while the browser component loads.
     if "saved_groq_key" not in st.session_state:
-        stored_groq = local_storage.getItem("yel_lon_groq_api_key")
+        stored_groq = local_storage.getItem("yel_lon_groq_api_key", key="load_groq_api_key")
         st.session_state.saved_groq_key = stored_groq or os.getenv("GROQ_API_KEY", "")
     if "saved_gemini_key" not in st.session_state:
-        stored_gemini = local_storage.getItem("yel_lon_gemini_api_key")
+        stored_gemini = local_storage.getItem("yel_lon_gemini_api_key", key="load_gemini_api_key")
         st.session_state.saved_gemini_key = stored_gemini or os.getenv("GEMINI_API_KEY", "")
 
     st.markdown("[Get Groq API key ↗](https://console.groq.com/keys)")
