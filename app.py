@@ -393,8 +393,8 @@ with st.sidebar:
     if st.button("💾 Save API Keys", use_container_width=True):
         groq_to_save = st.session_state.get("groq_key_input", "").strip()
         gemini_to_save = st.session_state.get("gemini_key_input", "").strip()
-        local_storage.setItem("yel_lon_groq_api_key", groq_to_save)
-        local_storage.setItem("yel_lon_gemini_api_key", gemini_to_save)
+        local_storage.setItem("yel_lon_groq_api_key", groq_to_save, key="save_groq_api_key")
+        local_storage.setItem("yel_lon_gemini_api_key", gemini_to_save, key="save_gemini_api_key")
         st.session_state.saved_groq_key = groq_to_save
         st.session_state.saved_gemini_key = gemini_to_save
         st.success("Saved in this browser. Reloading the page should keep these values.")
