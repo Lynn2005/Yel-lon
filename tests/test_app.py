@@ -52,6 +52,10 @@ class HelperFunctionTests(unittest.TestCase):
 
 class ApiKeyPersistenceRegressionTests(unittest.TestCase):
 
+    def test_translation_batches_more_segments_per_request(self):
+        self.assertIn("batch_size = 80", APP_SOURCE)
+        self.assertIn("Return ONLY a valid JSON array of {id,text} objects.", APP_SOURCE)
+
     def test_gemini_uses_current_model_ids_not_shutdown_gemini_2(self):
         self.assertIn('model="gemini-3.8-flash"', APP_SOURCE)
         self.assertIn('"gemini-3.7-flash"', APP_SOURCE)
