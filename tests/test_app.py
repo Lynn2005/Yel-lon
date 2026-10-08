@@ -52,6 +52,15 @@ class HelperFunctionTests(unittest.TestCase):
 
 class ApiKeyPersistenceRegressionTests(unittest.TestCase):
 
+    def test_live_editor_and_video_effect_controls_exist(self):
+        self.assertIn("Live Edit Studio", APP_SOURCE)
+        self.assertIn("Subtitle Live Edit (SRT format)", APP_SOURCE)
+        self.assertIn("blur_strength=blur_strength", APP_SOURCE)
+        self.assertIn("mirror=mirror_on", APP_SOURCE)
+        self.assertIn("logo_path=logo_path", APP_SOURCE)
+        self.assertIn('vf.append("hflip")', APP_SOURCE)
+        self.assertIn("boxblur=", APP_SOURCE)
+
     def test_translation_batches_more_segments_per_request(self):
         self.assertIn("batch_size = 80", APP_SOURCE)
         self.assertIn("Return ONLY a valid JSON array of {id,text} objects.", APP_SOURCE)
