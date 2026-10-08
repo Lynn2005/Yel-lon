@@ -196,13 +196,13 @@ def translate_burmese(transcript_data, key, model):
         return text, []
     translated_segments = []
     # Translate batches while preserving the original timestamps for a usable Burmese SRT.
-    batch_size = 35
+    batch_size = 80
     for start in range(0, len(segments), batch_size):
         batch = segments[start:start + batch_size]
         payload = [{"id": start + i + 1, "text": str(s.get("text", "")).strip()} for i, s in enumerate(batch)]
-        prompt = ("Translate each movie dialogue segment into natural spoken Myanmar Burmese. "
-                  "Return ONLY valid JSON array with objects {id,text}; keep every id exactly, "
-                  "preserve names and meaning, do not merge segments, omit nothing, and do not add commentary.\n"
+        prompt = ("Translate each movie dialogue segment into natural, concise spoken Myanmar Burmese. "
+                  "Return ONLY a valid JSON array of {id,text} objects. Preserve every id, timestamp alignment, "
+                  "character name, meaning, and segment; do not add commentary.\n"
                   + json.dumps(payload, ensure_ascii=False))
         raw = gemini_text(prompt, key, model)
         try:
