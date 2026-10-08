@@ -51,16 +51,11 @@ class HelperFunctionTests(unittest.TestCase):
 
 
 class ApiKeyPersistenceRegressionTests(unittest.TestCase):
-    def test_groq_and_gemini_reads_have_distinct_component_keys(self):
-        self.assertIn(
-            'local_storage.getItem("yel_lon_groq_api_key", key="load_groq_api_key")',
-            APP_SOURCE,
-        )
-        self.assertIn(
-            'local_storage.getItem("yel_lon_gemini_api_key", key="load_gemini_api_key")',
-            APP_SOURCE,
-        )
-        self.assertNotEqual("load_groq_api_key", "load_gemini_api_key")
+    def test_reads_use_supported_getitem_signature(self):
+        self.assertIn('local_storage.getItem("yel_lon_groq_api_key")', APP_SOURCE)
+        self.assertIn('local_storage.getItem("yel_lon_gemini_api_key")', APP_SOURCE)
+        self.assertNotIn('getItem("yel_lon_groq_api_key", key=', APP_SOURCE)
+        self.assertNotIn('getItem("yel_lon_gemini_api_key", key=', APP_SOURCE)
 
     def test_groq_and_gemini_writes_have_distinct_component_keys(self):
         self.assertIn(
