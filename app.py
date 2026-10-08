@@ -374,10 +374,15 @@ st.markdown("""
 """, unsafe_allow_html=True)
 with st.sidebar:
     st.header("🔑 API Settings")
+    from streamlit_local_storage import LocalStorage
+    local_storage = LocalStorage()
+
     if "saved_groq_key" not in st.session_state:
-        st.session_state.saved_groq_key = os.getenv("GROQ_API_KEY", "")
+        stored_groq = local_storage.getItem("yel_lon_groq_api_key", key="load_groq_api_key")
+        st.session_state.saved_groq_key = stored_groq or os.getenv("GROQ_API_KEY", "")
     if "saved_gemini_key" not in st.session_state:
-        st.session_state.saved_gemini_key = os.getenv("GEMINI_API_KEY", "")
+        stored_gemini = local_storage.getItem("yel_lon_gemini_api_key", key="load_gemini_api_key")
+        st.session_state.saved_gemini_key = stored_gemini or os.getenv("GEMINI_API_KEY", "")
 
     st.markdown("[Get Groq API key ↗](https://console.groq.com/keys)")
     st.text_input("Groq API Key", type="password", key="groq_key_input",
@@ -386,12 +391,16 @@ with st.sidebar:
     st.text_input("Gemini API Key", type="password", key="gemini_key_input",
                   value=st.session_state.saved_gemini_key)
     if st.button("💾 Save API Keys", use_container_width=True):
-        st.session_state.saved_groq_key = st.session_state.get("groq_key_input", "").strip()
-        st.session_state.saved_gemini_key = st.session_state.get("gemini_key_input", "").strip()
-        st.success("API keys saved for this session.")
+        groq_to_save = st.session_state.get("groq_key_input", "").strip()
+        gemini_to_save = st.session_state.get("gemini_key_input", "").strip()
+        local_storage.setItem("yel_lon_groq_api_key", groq_to_save)
+        local_storage.setItem("yel_lon_gemini_api_key", gemini_to_save)
+        st.session_state.saved_groq_key = groq_to_save
+        st.session_state.saved_gemini_key = gemini_to_save
+        st.success("Saved in this browser. Reloading the page should keep these values.")
     groq_key = st.session_state.get("groq_key_input", st.session_state.saved_groq_key).strip()
     gemini_key = st.session_state.get("gemini_key_input", st.session_state.saved_gemini_key).strip()
-    st.caption("Save သည် လက်ရှိ session အတွင်းသာဖြစ်သည်။ အမြဲတမ်းသိမ်းရန် Streamlit Secrets သုံးပါ။ API key များကို GitHub code ထဲမထည့်ပါနှင့်။")
+    st.caption("Stored in this browser only. Do not save keys on a shared device, and never put keys in public GitHub code.")
     st.divider()
     st.subheader("⚙️ Recap Settings")
     recap_length = st.selectbox("Recap Length", ["Auto", "1–2 Minutes", "3–5 Minutes", "5–10 Minutes", "10–15 Minutes", "Custom"], index=2)
