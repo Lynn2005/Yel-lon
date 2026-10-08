@@ -13,19 +13,7 @@ import requests
 import streamlit as st
 
 st.set_page_config(page_title="Lynn Recap · One Click", page_icon="🎬", layout="wide")
-st.markdown("""
-<style>
-:root{color-scheme:dark}
-.stApp{background:radial-gradient(ellipse at 85% 0%,#1c2b50 0,transparent 38%),#090d18;color:#f5f7ff}
-.block-container{max-width:1100px;padding-top:1.2rem;padding-bottom:3rem}
-section[data-testid="stSidebar"]{background:#101728}
-div[data-testid="stFileUploader"]{background:#111a2b;border:1px solid #293752;border-radius:16px;padding:12px}
-.stButton>button,.stDownloadButton>button{border-radius:12px;min-height:46px;font-weight:700}
-h1,h2,h3{letter-spacing:-.4px}
-div[data-testid="stProgress"]>div>div{background:linear-gradient(90deg,#5b8cff,#8c5bff)}
-.small-note{color:#93a2bb;font-size:.9rem}
-</style>
-""", unsafe_allow_html=True)
+st.markdown("<style>" + Path("style.css").read_text(encoding="utf-8") + "</style>", unsafe_allow_html=True)
 
 ROOT = Path("jobs")
 ROOT.mkdir(exist_ok=True)
@@ -376,8 +364,14 @@ def validate_final(path):
     if float(info.get("format", {}).get("duration") or 0) <= 0:
         raise RuntimeError("Final rendering failed.")
 
-st.title("🎬 Lynn Recap")
-st.caption("AI Movie Recap Studio · Upload once, create a Burmese recap automatically.")
+st.markdown("""
+<div class="hero">
+  <div class="hero-kicker">LYNN RECAP STUDIO · AI WORKFLOW</div>
+  <div class="hero-title">Turn any movie into a<br/>Myanmar recap video.</div>
+  <div class="hero-copy">Upload your movie, choose your preferred style, and let the pipeline handle transcription, Burmese translation, narration, subtitles, and final rendering.</div>
+  <div class="pill-row"><span class="pill">✦ One-click processing</span><span class="pill">🇲🇲 Myanmar narration</span><span class="pill">🎞️ MP4 export</span></div>
+</div>
+""", unsafe_allow_html=True)
 with st.sidebar:
     st.header("🔑 API Settings")
     groq_key = st.text_input("Groq API Key", type="password", value=os.getenv("GROQ_API_KEY", ""))
@@ -398,8 +392,9 @@ with st.sidebar:
         st.caption("FFmpeg/FFprobe are checked at runtime.")
         st.caption("Streamlit Community Cloud storage is temporary; jobs can be lost after restart.")
 
-st.markdown("## 🎬 Upload Movie")
-video_file = st.file_uploader("Drop Movie Here or Choose Video", type=["mp4", "mkv", "mov", "webm", "avi"])
+st.markdown("## 01 · Upload your movie")
+st.caption("MP4, MKV, MOV, WEBM or AVI · Configure API keys and output preferences in the sidebar first.")
+video_file = st.file_uploader("Drop your movie here or browse files", type=["mp4", "mkv", "mov", "webm", "avi"], help="Choose a movie file with a readable audio track.")
 if video_file:
     st.success(f"Selected: {video_file.name} · {video_file.size / 1024 / 1024:.1f} MB")
     st.video(video_file)
@@ -409,7 +404,9 @@ if "current_job" not in st.session_state:
 if "job_error" not in st.session_state:
     st.session_state.job_error = ""
 
-start = st.button("🚀 ONE CLICK RECAP", type="primary", use_container_width=True,
+st.markdown("## 02 · Generate your recap")
+st.caption("One click runs the complete workflow from audio extraction to final MP4.")
+start = st.button("✦  GENERATE MY RECAP", type="primary", use_container_width=True,
                   disabled=not (video_file and groq_key and gemini_key))
 if start:
     if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
