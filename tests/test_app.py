@@ -106,6 +106,12 @@ class ApiKeyPersistenceRegressionTests(unittest.TestCase):
         self.assertIn('st.session_state.saved_groq_key = stored_groq or os.getenv("GROQ_API_KEY", "")', APP_SOURCE)
         self.assertIn('st.session_state.saved_gemini_key = stored_gemini or os.getenv("GEMINI_API_KEY", "")', APP_SOURCE)
 
+    def test_burmese_subtitles_are_wrapped_and_smaller(self):
+        self.assertIn("def wrap_subtitle_text(text, max_chars=25)", APP_SOURCE)
+        self.assertIn("def create_timed_srt(chunks, voice_file, out, max_chars=25)", APP_SOURCE)
+        self.assertIn("FontSize=18", APP_SOURCE)
+        self.assertIn("MarginV=58", APP_SOURCE)
+
 
 if __name__ == "__main__":
     unittest.main()
