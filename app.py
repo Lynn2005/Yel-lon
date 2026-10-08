@@ -327,11 +327,12 @@ def font_path():
     ]
     return next((p for p in candidates if Path(p).exists()), None)
 
-def render_video(video, voice, srt, output, ratio, subtitle_on, bgm_on=False):
+def render_video(video, voice, srt, output, ratio, subtitle_on, bgm_on=False,
+                 blur_strength=0, mirror=False, logo_path=None, logo_position="Top right"):
     args = ["ffmpeg", "-y", "-i", str(video), "-i", str(voice)]
-    if bgm_on:
-        # No BGM file configured in the simple UI; do not fabricate one.
-        bgm_on = False
+    use_logo = bool(logo_path and Path(logo_path).exists())
+    if use_logo:
+        args += ["-i", str(logo_path)]
     vf = []
     if ratio == "9:16 · Reels/Shorts":
         vf.append("scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280")
@@ -339,18 +340,38 @@ def render_video(video, voice, srt, output, ratio, subtitle_on, bgm_on=False):
         vf.append("scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2")
     elif ratio == "1:1 · Square":
         vf.append("scale=720:720:force_original_aspect_ratio=increase,crop=720:720")
+    if blur_strength and int(blur_strength) > 0:
+        radius = max(1, min(20, int(blur_strength)))
+        vf.append(f"boxblur={radius}:1")
+    if mirror:
+        vf.append("hflip")
     if subtitle_on and srt and srt.exists():
-        # FFmpeg subtitles filter path escaping for Windows/Unix punctuation.
-        sub = str(srt.resolve()).replace("\\", "/").replace(":", r"\:").replace("'", r"\'")
+        sub = str(srt.resolve()).replace("\\", "/").replace(":", r"\\:").replace("'", r"\\'")
         font = font_path()
         style = "FontSize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=36"
         if font:
             style += ",FontName=Noto Sans Myanmar"
         vf.append(f"subtitles='{sub}':force_style='{style}'")
-    if vf:
-        args += ["-vf", ",".join(vf)]
-    args += ["-map", "0:v:0", "-map", "1:a:0", "-c:v", "libx264", "-preset", "veryfast",
-             "-crf", "23", "-c:a", "aac", "-b:a", "192k", "-af", "loudnorm=I=-16:TP=-1.5:LRA=11",
+    if use_logo:
+        # Render base video effects first, then overlay the user's logo image.
+        base_chain = ",".join(vf) if vf else "null"
+        positions = {
+            "Top left": "20:20",
+            "Top right": "W-w-20:20",
+            "Bottom left": "20:H-h-20",
+            "Bottom right": "W-w-20:H-h-20",
+            "Center": "(W-w)/2:(H-h)/2",
+        }
+        pos = positions.get(logo_position, "W-w-20:20")
+        args += ["-filter_complex",
+                 f"[0:v]{base_chain}[base];[2:v]scale=180:-1[logo];[base][logo]overlay={pos}[outv]",
+                 "-map", "[outv]", "-map", "1:a:0"]
+    else:
+        if vf:
+            args += ["-vf", ",".join(vf)]
+        args += ["-map", "0:v:0", "-map", "1:a:0"]
+    args += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+             "-c:a", "aac", "-b:a", "192k", "-af", "loudnorm=I=-16:TP=-1.5:LRA=11",
              "-shortest", "-movflags", "+faststart", str(output)]
     run_cmd(args, timeout=7200)
 
@@ -535,7 +556,8 @@ if start:
             completed.append("sync")
             stage("render", 90, "Rendering final MP4 with narration")
             final_path = job / "final.mp4"
-            render_video(input_path, voice_file, recap_srt, final_path, ratio, subtitle_on)
+            render_video(input_path, voice_file, recap_srt, final_path, ratio, subtitle_on,
+                         blur_strength=0, mirror=False, logo_path=None)
             completed.append("render")
             stage("final_validation", 98, "Validating final video")
             validate_final(final_path)
