@@ -1,0 +1,33 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+Myanmar:wght@400;500;600;700&display=swap');
+:root{color-scheme:dark}
+.stApp{background:radial-gradient(ellipse at 12% -8%,rgba(54,94,180,.24),transparent 38%),radial-gradient(ellipse at 100% 0%,rgba(107,65,190,.16),transparent 30%),#080b12;color:#f4f6fc;font-family:Inter,'Noto Sans Myanmar',sans-serif}
+.block-container{max-width:1180px;padding:2rem 1.5rem 4rem}
+header[data-testid="stHeader"]{background:rgba(8,11,18,.72)}
+section[data-testid="stSidebar"]{background:linear-gradient(180deg,#111827,#0c111b);border-right:1px solid #202a3b}
+section[data-testid="stSidebar"]>div{padding-top:1.4rem}
+.stMarkdown h1,.stMarkdown h2,.stMarkdown h3{letter-spacing:-.045em;font-weight:750}
+.stMarkdown h2{font-size:1.35rem;margin-top:1.4rem}
+.stCaption,.stMarkdown p{color:#aab5c8}
+div[data-testid="stFileUploader"]{background:linear-gradient(145deg,rgba(23,33,52,.9),rgba(13,19,31,.9));border:1px dashed #435574;border-radius:20px;padding:18px;transition:border-color .2s,background .2s}
+div[data-testid="stFileUploader"]:hover{border-color:#7b9cff;background:#131e31}
+div[data-testid="stFileUploader"] section{border:0}
+.stButton>button,.stDownloadButton>button{border-radius:12px;min-height:46px;font-weight:700;border:1px solid #2d3b53;transition:transform .15s,border-color .15s,filter .15s}
+.stButton>button:hover,.stDownloadButton>button:hover{border-color:#7c9bff;filter:brightness(1.08);transform:translateY(-1px)}
+.stButton>button[kind="primary"]{background:linear-gradient(105deg,#5278f5,#8057e8);border:0;color:white;box-shadow:0 8px 26px rgba(83,105,239,.22);font-size:1.02rem;min-height:54px}
+.stButton>button[kind="primary"]:hover{box-shadow:0 10px 32px rgba(83,105,239,.34)}
+.stDownloadButton>button{background:#121c2b;color:#eaf0ff}
+div[data-testid="stProgress"]>div{background:#1a2435;border-radius:999px;overflow:hidden}
+div[data-testid="stProgress"]>div>div{background:linear-gradient(90deg,#5b8cff,#9b6dff);border-radius:999px}
+div[data-testid="stAlert"]{border-radius:14px;border:1px solid #2b3a53}
+div[data-testid="stExpander"]{border:1px solid #263247;border-radius:14px;background:rgba(16,23,36,.58)}
+div[data-testid="stVideo"]{border-radius:16px;overflow:hidden;border:1px solid #28354a}
+div[data-testid="stTextInput"] input,div[data-testid="stSelectbox"] div[data-baseweb="select"]>div,div[data-testid="stTextArea"] textarea{background:#0b1220;border-color:#2a374d;border-radius:10px}
+hr{border-color:#263247}
+.hero{padding:26px 28px;border:1px solid rgba(126,151,255,.24);border-radius:22px;background:linear-gradient(115deg,rgba(28,43,72,.96),rgba(24,20,48,.92));margin:0 0 1.3rem;box-shadow:0 16px 50px rgba(0,0,0,.18)}
+.hero-kicker{font-size:.76rem;font-weight:800;letter-spacing:.16em;text-transform:uppercase;color:#9fb6ff}
+.hero-title{font-size:clamp(1.8rem,4vw,2.6rem);line-height:1.18;font-weight:800;letter-spacing:-.055em;color:#fff;margin:.45rem 0 .55rem}
+.hero-copy{color:#b8c4dc;font-size:1rem;max-width:700px;line-height:1.75}
+.pill-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}
+.pill{padding:6px 10px;border-radius:999px;border:1px solid #3a4a69;background:rgba(10,17,30,.5);font-size:.78rem;color:#d7e1fa}
+div[data-testid="stMetric"]{background:#111a29;border:1px solid #26344a;padding:14px 16px;border-radius:15px}
+@media(max-width:700px){.block-container{padding:1.1rem .85rem 2.5rem}.hero{padding:21px 18px;border-radius:18px}.hero-copy{font-size:.92rem}div[data-testid="stFileUploader"]{padding:10px}}
