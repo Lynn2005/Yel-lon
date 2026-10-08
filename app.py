@@ -303,6 +303,29 @@ def generate_voice(script, job, speed, voice):
              "-c:a", "libmp3lame", "-q:a", "3", str(full)], timeout=1800)
     return full, chunks
 
+def wrap_subtitle_text(text, max_chars=25, max_lines=2):
+    """Wrap Burmese subtitle text into short, readable lines."""
+    text = re.sub(r"\\s+", " ", str(text)).strip()
+    if not text:
+        return ""
+    max_chars = max(12, min(35, int(max_chars)))
+    words = text.split(" ")
+    lines, line = [], ""
+    for word in words:
+        # Keep Burmese phrase chunks together where possible; split only unusually long chunks.
+        pieces = [word[i:i + max_chars] for i in range(0, len(word), max_chars)] if len(word) > max_chars else [word]
+        for piece in pieces:
+            candidate = (line + " " + piece).strip()
+            if len(candidate) > max_chars and line:
+                lines.append(line)
+                line = piece
+            else:
+                line = candidate
+    if line:
+        lines.append(line)
+    # More than two lines makes subtitles cover too much of the image; use separate timed cues.
+    return lines
+
 def create_timed_srt(chunks, voice_file, out, max_chars=25):
     # Segment duration is measured from the generated audio, not estimated from text.
     durations = []
@@ -313,8 +336,18 @@ def create_timed_srt(chunks, voice_file, out, max_chars=25):
         durations.append(max(0.2, d))
     t, segments = 0.0, []
     for text, duration in zip(chunks, durations):
-        # Reuse the generated sentence timing; 0.15 seconds of breathing space.
-        segments.append({"start": t, "end": t + duration, "text": text})
+        lines = wrap_subtitle_text(text, max_chars=max_chars)
+        if not lines:
+            t += duration + 0.15
+            continue
+        # Divide long sentences into timed cues so no subtitle occupies more than two lines.
+        cue_groups = [lines[i:i + 2] for i in range(0, len(lines), 2)]
+        usable = max(0.2, duration)
+        for idx, group in enumerate(cue_groups):
+            cue_start = t + usable * idx / len(cue_groups)
+            cue_end = t + usable * (idx + 1) / len(cue_groups)
+            segments.append({"start": cue_start, "end": max(cue_start + 0.15, cue_end),
+                             "text": "\\n".join(group)})
         t += duration + 0.15
     out.write_text(make_srt(segments), encoding="utf-8")
 
@@ -353,7 +386,7 @@ def render_video(video, voice, srt, output, ratio, subtitle_on, bgm_on=False,
         vf.append("hflip")
     if subtitle_on and srt and srt.exists():
         sub = str(srt.resolve()).replace("\\", "/").replace(":", r"\\:").replace("'", r"\\'")
-        style = "FontSize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=36"
+        style = "FontSize=18,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=58"
         if font_path():
             style += ",FontName=Noto Sans Myanmar"
         vf.append(f"subtitles='{sub}':force_style='{style}'")
