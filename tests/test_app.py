@@ -61,6 +61,20 @@ class ApiKeyPersistenceRegressionTests(unittest.TestCase):
         self.assertIn('vf.append("hflip")', APP_SOURCE)
         self.assertIn("boxblur=", APP_SOURCE)
 
+    def test_live_editor_has_region_blur_music_and_independent_toggles(self):
+        for label in [
+            "Region Blur ON/OFF", "Background Music ON/OFF", "Logo ON/OFF",
+            "Subtitles ON/OFF", "Mirror ON/OFF", "Blur X position (%)",
+            "Blur Y position (%)", "Blur width (%)", "Blur height (%)",
+            "Blur style", "Music volume (%)",
+        ]:
+            self.assertIn(label, APP_SOURCE)
+        self.assertIn("blur_on=blur_on", APP_SOURCE)
+        self.assertIn("bgm_on=bgm_on", APP_SOURCE)
+        self.assertIn("amix=inputs=2:duration=first", APP_SOURCE)
+        self.assertIn("crop=w=iw*", APP_SOURCE)
+        self.assertIn("scale2ref=w=main_w*", APP_SOURCE)
+
     def test_translation_batches_more_segments_per_request(self):
         self.assertIn("batch_size = 80", APP_SOURCE)
         self.assertIn("Return ONLY a valid JSON array of {id,text} objects.", APP_SOURCE)
