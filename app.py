@@ -326,6 +326,40 @@ def wrap_subtitle_text(text, max_chars=25, max_lines=2):
     # More than two lines makes subtitles cover too much of the image; use separate timed cues.
     return lines
 
+def normalize_srt_file(path, max_chars=25):
+    """Reflow an existing recap SRT into short two-line cues before re-rendering."""
+    if not path.exists():
+        return
+    raw = path.read_text(encoding="utf-8-sig").strip()
+    if not raw:
+        return
+    blocks = re.split(r"\n\s*\n", raw)
+    output = []
+    def parse_time(value):
+        hh, mm, rest = value.split(":")
+        ss, ms = rest.split(",")
+        return int(hh) * 3600 + int(mm) * 60 + int(ss) + int(ms) / 1000
+    for block in blocks:
+        rows = block.splitlines()
+        if len(rows) < 3 or "-->" not in rows[1]:
+            continue
+        try:
+            start_raw, end_raw = [x.strip() for x in rows[1].split("-->", 1)]
+            start, end = parse_time(start_raw), parse_time(end_raw)
+        except (ValueError, IndexError):
+            continue
+        lines = wrap_subtitle_text(" ".join(rows[2:]), max_chars=max_chars)
+        groups = [lines[i:i + 2] for i in range(0, len(lines), 2)]
+        if not groups:
+            continue
+        for i, group in enumerate(groups):
+            cue_start = start + (end - start) * i / len(groups)
+            cue_end = start + (end - start) * (i + 1) / len(groups)
+            output.append({"start": cue_start, "end": max(cue_start + 0.15, cue_end),
+                           "text": "\n".join(group)})
+    if output:
+        path.write_text(make_srt(output), encoding="utf-8")
+
 def create_timed_srt(chunks, voice_file, out, max_chars=25):
     # Segment duration is measured from the generated audio, not estimated from text.
     durations = []
@@ -738,6 +772,8 @@ if job_id:
             try:
                 if edited_srt_text.strip() and edit_srt_path.exists():
                     edit_srt_path.write_text(edited_srt_text.strip() + "\n", encoding="utf-8")
+                if edit_subtitle_on:
+                    normalize_srt_file(edit_srt_path, max_chars=25)
                 logo_path = None
                 if logo_on and logo_file is not None:
                     logo_path = job / "custom_logo.png"
