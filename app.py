@@ -149,8 +149,9 @@ def groq_transcribe(audio, key, model="whisper-large-v3-turbo"):
                                          "-of", "default=noprint_wrappers=1:nokey=1", str(chunk)]).strip())
     return {"text": "\n".join(full_text).strip(), "segments": all_segments}
 
-def gemini_text(prompt, key, model="gemini-2.5-flash"):
-    models = [model, "gemini-2.0-flash"]
+def gemini_text(prompt, key, model="gemini-3.8-flash"):
+    # Gemini 2.0 Flash has been shut down; use currently supported model IDs.
+    models = [model, "gemini-3.7-flash", "gemini-3.5-flash-lite"]
     last_error = ""
     for chosen in dict.fromkeys(models):
         for attempt in range(3):
@@ -158,8 +159,7 @@ def gemini_text(prompt, key, model="gemini-2.5-flash"):
                 r = requests.post(
                     f"https://generativelanguage.googleapis.com/v1beta/models/{chosen}:generateContent",
                     headers={"x-goog-api-key": key, "Content-Type": "application/json"},
-                    json={"contents": [{"parts": [{"text": prompt}]}],
-                          "generationConfig": {"temperature": 0.35}},
+                    json={"contents": [{"parts": [{"text": prompt}]}],}
                     timeout=180)
                 if r.status_code in (429, 500, 502, 503, 504) and attempt < 2:
                     time.sleep(1.5 * (attempt + 1))
@@ -412,7 +412,7 @@ with st.sidebar:
     ratio = st.selectbox("Aspect Ratio", ["Original", "9:16 · Reels/Shorts", "16:9 · YouTube", "1:1 · Square"])
     subtitle_on = st.toggle("Burn Burmese subtitles into video", value=True)
     line_chars = st.selectbox("Subtitle characters per line", [20, 25, 30, 35], index=1)
-    model = st.selectbox("Gemini Model", ["gemini-2.5-flash", "gemini-2.0-flash"], index=0)
+    model = st.selectbox("Gemini Model", ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash-lite"], index=0)
     with st.expander("Advanced Settings"):
         st.caption("STT: Groq Whisper · LLM: Gemini · TTS: Edge TTS fallback")
         st.caption("FFmpeg/FFprobe are checked at runtime.")
