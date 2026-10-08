@@ -418,12 +418,16 @@ def render_video(video, voice, srt, output, ratio, subtitle_on, bgm_on=False,
         vf.append("scale=720:720:force_original_aspect_ratio=increase,crop=720:720")
     if mirror:
         vf.append("hflip")
+
+    # Blur the original image first, then burn Burmese subtitles on top so the new
+    # subtitles stay sharp and readable instead of being blurred with the source.
+    sub_filter = None
     if subtitle_on and srt and srt.exists():
         sub = str(srt.resolve()).replace("\\", "/").replace(":", r"\\:").replace("'", r"\\'")
         style = "FontSize=18,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=58"
         if font_path():
             style += ",FontName=Noto Sans Myanmar"
-        vf.append(f"subtitles='{sub}':force_style='{style}'")
+        sub_filter = f"subtitles='{sub}':force_style='{style}'"
 
     graph = []
     base_chain = ",".join(vf) if vf else "null"
@@ -448,6 +452,10 @@ def render_video(video, voice, srt, output, ratio, subtitle_on, bgm_on=False,
     else:
         graph.append(f"[0:v]{base_chain}[base]")
         current = "base"
+
+    if sub_filter:
+        graph.append(f"[{current}]{sub_filter}[subtitled]")
+        current = "subtitled"
 
     if use_logo:
         positions = {
@@ -703,7 +711,17 @@ if job_id:
         final_path = job / "final.mp4"
         edit_srt_path = job / "recap.srt"
         st.markdown("## 🎛️ Live Edit Studio")
-        st.caption("စာတန်းကို တိုက်ရိုက်ပြင်၊ Blur / Mirror / Logo ထည့်ပြီး Preview ထုတ်နိုင်ပါတယ်။")
+        st.caption("မူရင်းစာတန်းကို Blur လုပ်ပြီး မြန်မာစာတန်းကို အပေါ်က ကြည်လင်စွာတင်နိုင်ပါတယ်။ ချိန်ညှိပြီး Preview ထုတ်ပါ။")
+        input_video_path = next((p for p in job.iterdir() if p.name.startswith("input") and p.is_file()), None)
+        preview_col, guide_col = st.columns([3, 2])
+        with preview_col:
+            st.markdown("### 🎞️ Editing Preview")
+            if input_video_path:
+                st.video(input_video_path.read_bytes())
+            elif final_path.exists():
+                st.video(final_path.read_bytes())
+        with guide_col:
+            st.info("Blur X/Y နဲ့ Width/Height ကို မူရင်းစာတန်းရှိတဲ့နေရာအတိုင်း ချိန်ပါ။ **Apply edits & render preview** နှိပ်ပြီး ပြင်ထားတဲ့ဗီဒီယိုကို အောက်မှာကြည့်နိုင်ပါတယ်။")
         if edit_srt_path.exists():
             current_srt = edit_srt_path.read_text(encoding="utf-8")
             edited_srt_text = st.text_area(
