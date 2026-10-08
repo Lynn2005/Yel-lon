@@ -328,11 +328,20 @@ def font_path():
     return next((p for p in candidates if Path(p).exists()), None)
 
 def render_video(video, voice, srt, output, ratio, subtitle_on, bgm_on=False,
-                 blur_strength=0, mirror=False, logo_path=None, logo_position="Top right"):
+                 blur_on=False, blur_strength=10, blur_x=25, blur_y=25, blur_w=35, blur_h=25,
+                 blur_style="Gaussian", mirror=False, logo_on=False, logo_path=None,
+                 logo_position="Top right", logo_size=15, bgm_path=None, bgm_volume=20):
+    """Render narration video with independently optional region blur, logo and background music."""
     args = ["ffmpeg", "-y", "-i", str(video), "-i", str(voice)]
-    use_logo = bool(logo_path and Path(logo_path).exists())
+    use_logo = bool(logo_on and logo_path and Path(logo_path).exists())
+    use_bgm = bool(bgm_on and bgm_path and Path(bgm_path).exists())
     if use_logo:
         args += ["-i", str(logo_path)]
+    logo_index = 2 if use_logo else None
+    if use_bgm:
+        args += ["-i", str(bgm_path)]
+    bgm_index = (3 if use_logo else 2) if use_bgm else None
+
     vf = []
     if ratio == "9:16 · Reels/Shorts":
         vf.append("scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280")
@@ -340,21 +349,40 @@ def render_video(video, voice, srt, output, ratio, subtitle_on, bgm_on=False,
         vf.append("scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2")
     elif ratio == "1:1 · Square":
         vf.append("scale=720:720:force_original_aspect_ratio=increase,crop=720:720")
-    if blur_strength and int(blur_strength) > 0:
-        radius = max(1, min(20, int(blur_strength)))
-        vf.append(f"boxblur={radius}:1")
     if mirror:
         vf.append("hflip")
     if subtitle_on and srt and srt.exists():
         sub = str(srt.resolve()).replace("\\", "/").replace(":", r"\\:").replace("'", r"\\'")
-        font = font_path()
         style = "FontSize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=36"
-        if font:
+        if font_path():
             style += ",FontName=Noto Sans Myanmar"
         vf.append(f"subtitles='{sub}':force_style='{style}'")
+
+    graph = []
+    base_chain = ",".join(vf) if vf else "null"
+    if blur_on:
+        # Coordinates and dimensions are percentages of the output frame; clamp to frame bounds.
+        x = max(0, min(95, int(blur_x)))
+        y = max(0, min(95, int(blur_y)))
+        w = max(5, min(100 - x, int(blur_w)))
+        h = max(5, min(100 - y, int(blur_h)))
+        blur_strength = max(1, min(30, int(blur_strength)))
+        if blur_style == "Pixelate":
+            blur_filter = f"scale=iw/12:ih/12:flags=neighbor,scale=iw*12:ih*12:flags=neighbor"
+        else:
+            blur_filter = f"boxblur={blur_strength}:2"
+        graph.append(f"[0:v]{base_chain},split=2[clean][blurinput]")
+        graph.append(
+            f"[blurinput]crop=w=iw*{w}/100:h=ih*{h}/100:x=iw*{x}/100:y=ih*{y}/100,"
+            f"{blur_filter}[blurred]"
+        )
+        graph.append(f"[clean][blurred]overlay=x=W*{x}/100:y=H*{y}/100:shortest=1[region]")
+        current = "region"
+    else:
+        graph.append(f"[0:v]{base_chain}[base]")
+        current = "base"
+
     if use_logo:
-        # Render base video effects first, then overlay the user's logo image.
-        base_chain = ",".join(vf) if vf else "null"
         positions = {
             "Top left": "20:20",
             "Top right": "W-w-20:20",
@@ -363,16 +391,25 @@ def render_video(video, voice, srt, output, ratio, subtitle_on, bgm_on=False,
             "Center": "(W-w)/2:(H-h)/2",
         }
         pos = positions.get(logo_position, "W-w-20:20")
-        args += ["-filter_complex",
-                 f"[0:v]{base_chain}[base];[2:v]scale=180:-1[logo];[base][logo]overlay={pos}[outv]",
-                 "-map", "[outv]", "-map", "1:a:0"]
+        graph.append(f"[{current}][{logo_index}:v]scale2ref=w=main_w*{max(5, min(50, int(logo_size)))}/100:h=-1[logo][ref]")
+        graph.append(f"[ref][logo]overlay={pos}[withlogo]")
+        current = "withlogo"
+
+    if use_bgm:
+        volume = max(0, min(100, int(bgm_volume))) / 100
+        graph.append(f"[1:a]volume=1[voiceaudio]")
+        graph.append(f"[{bgm_index}:a]volume={volume}[musicaudio]")
+        graph.append("[voiceaudio][musicaudio]amix=inputs=2:duration=first:dropout_transition=2,loudnorm=I=-16:TP=-1.5:LRA=11[aout]")
+        audio_map = "[aout]"
     else:
-        if vf:
-            args += ["-vf", ",".join(vf)]
-        args += ["-map", "0:v:0", "-map", "1:a:0"]
-    args += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-             "-c:a", "aac", "-b:a", "192k", "-af", "loudnorm=I=-16:TP=-1.5:LRA=11",
-             "-shortest", "-movflags", "+faststart", str(output)]
+        audio_map = "1:a:0"
+
+    args += ["-filter_complex", ";".join(graph), "-map", f"[{current}]", "-map", audio_map,
+             "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+             "-c:a", "aac", "-b:a", "192k"]
+    if not use_bgm:
+        args += ["-af", "loudnorm=I=-16:TP=-1.5:LRA=11"]
+    args += ["-shortest", "-movflags", "+faststart", str(output)]
     run_cmd(args, timeout=7200)
 
 def validate_final(path):
@@ -597,20 +634,55 @@ if job_id:
         else:
             edited_srt_text = ""
             st.info("Recap SRT မရှိသေးပါ။ Recap ထုတ်ပြီးမှ စာတန်းပြင်နိုင်ပါတယ်။")
-        edit_a, edit_b = st.columns(2)
-        with edit_a:
-            edit_subtitle_on = st.toggle("စာတန်းထိုး ဖွင့်ထားမယ်", value=True, key=f"{job_id}_edit_subtitle")
-            blur_strength = st.slider("🌫️ Blur အား", min_value=0, max_value=20, value=0,
-                                      help="0 = Blur မလုပ်ပါ", key=f"{job_id}_edit_blur")
-        with edit_b:
-            mirror_on = st.toggle("🪞 Mirror (ဘယ်/ညာလှန်)", value=False, key=f"{job_id}_edit_mirror")
-            logo_position = st.selectbox("🏷️ Logo နေရာ", ["Top right", "Top left", "Bottom right", "Bottom left", "Center"],
+        st.markdown("### 🎚️ Effect Switches")
+        effect_a, effect_b, effect_c = st.columns(3)
+        with effect_a:
+            edit_subtitle_on = st.toggle("📝 Subtitles ON/OFF", value=True, key=f"{job_id}_edit_subtitle")
+            blur_on = st.toggle("🌫️ Region Blur ON/OFF", value=False, key=f"{job_id}_blur_on")
+        with effect_b:
+            mirror_on = st.toggle("🪞 Mirror ON/OFF", value=False, key=f"{job_id}_edit_mirror")
+            logo_on = st.toggle("🏷️ Logo ON/OFF", value=False, key=f"{job_id}_logo_on")
+        with effect_c:
+            bgm_on = st.toggle("🎵 Background Music ON/OFF", value=False, key=f"{job_id}_bgm_on")
+
+        if blur_on:
+            st.markdown("#### 🌫️ Blur Adjust")
+            blur_x, blur_y = st.columns(2)
+            with blur_x:
+                blur_left = st.slider("Blur X position (%)", 0, 95, 25, key=f"{job_id}_blur_x")
+                blur_width = st.slider("Blur width (%)", 5, 100, 35, key=f"{job_id}_blur_w")
+            with blur_y:
+                blur_top = st.slider("Blur Y position (%)", 0, 95, 25, key=f"{job_id}_blur_y")
+                blur_height = st.slider("Blur height (%)", 5, 100, 25, key=f"{job_id}_blur_h")
+            blur_strength = st.slider("Blur strength", 1, 30, 10, key=f"{job_id}_blur_strength")
+            blur_style = st.selectbox("Blur style", ["Gaussian", "Pixelate"], key=f"{job_id}_blur_style")
+            st.caption("X/Y က ဧရိယာရဲ့ ဘယ်ဘက်အပေါ်ထောင့်၊ width/height က အရွယ်အစား (%) ဖြစ်ပါတယ်။")
+        else:
+            blur_left, blur_top, blur_width, blur_height = 25, 25, 35, 25
+            blur_strength, blur_style = 10, "Gaussian"
+
+        logo_file = None
+        logo_position, logo_size = "Top right", 15
+        if logo_on:
+            st.markdown("#### 🏷️ Logo Adjust")
+            logo_position = st.selectbox("Logo position", ["Top right", "Top left", "Bottom right", "Bottom left", "Center"],
                                          key=f"{job_id}_edit_logo_position")
-        logo_file = st.file_uploader("Logo ထည့်ရန် (PNG/JPG, optional)", type=["png", "jpg", "jpeg"],
-                                     key=f"{job_id}_edit_logo_upload")
+            logo_size = st.slider("Logo size (% of video width)", 5, 50, 15, key=f"{job_id}_logo_size")
+            logo_file = st.file_uploader("Logo image (PNG/JPG)", type=["png", "jpg", "jpeg"],
+                                         key=f"{job_id}_edit_logo_upload")
+
+        bgm_file = None
+        bgm_volume = 20
+        if bgm_on:
+            st.markdown("#### 🎵 Background Music Adjust")
+            bgm_file = st.file_uploader("Background music (MP3/WAV/M4A)", type=["mp3", "wav", "m4a", "aac", "ogg"],
+                                         key=f"{job_id}_bgm_upload")
+            bgm_volume = st.slider("Music volume (%)", 0, 100, 20, key=f"{job_id}_bgm_volume")
+            st.caption("0% = music အသံမကြား၊ 20% = နောက်ခံသံအနိမ့်။")
+
         if st.button("💾 Save subtitle edits", key=f"{job_id}_save_srt_edits", use_container_width=True):
             if edited_srt_text.strip():
-                edit_srt_path.write_text(edited_srt_text.strip() + "\n", encoding="utf-8")
+                edit_srt_path.write_text(edited_srt_text.strip() + "\\n", encoding="utf-8")
                 st.success("စာတန်းပြင်ဆင်ချက် သိမ်းပြီးပါပြီ။")
                 st.rerun()
             else:
@@ -621,15 +693,24 @@ if job_id:
                 if edited_srt_text.strip() and edit_srt_path.exists():
                     edit_srt_path.write_text(edited_srt_text.strip() + "\\n", encoding="utf-8")
                 logo_path = None
-                if logo_file is not None:
+                if logo_on and logo_file is not None:
                     logo_path = job / "custom_logo.png"
                     logo_path.write_bytes(logo_file.getvalue())
+                bgm_path = None
+                if bgm_on and bgm_file is not None:
+                    bgm_path = job / ("background_music" + Path(bgm_file.name).suffix.lower())
+                    bgm_path.write_bytes(bgm_file.getvalue())
                 edited_output = job / "final_edited.mp4"
-                with st.spinner("Applying edits and rendering preview..."):
-                    render_video(job / next(p.name for p in job.iterdir() if p.name.startswith("input") and p.is_file()),
-                                 job / "voice_full.mp3", edit_srt_path, edited_output, ratio,
-                                 edit_subtitle_on, blur_strength=blur_strength, mirror=mirror_on,
-                                 logo_path=logo_path, logo_position=logo_position)
+                with st.spinner("Applying enabled effects and rendering preview..."):
+                    render_video(
+                        job / next(p.name for p in job.iterdir() if p.name.startswith("input") and p.is_file()),
+                        job / "voice_full.mp3", edit_srt_path, edited_output, ratio,
+                        edit_subtitle_on, blur_on=blur_on, blur_strength=blur_strength,
+                        blur_x=blur_left, blur_y=blur_top, blur_w=blur_width, blur_h=blur_height,
+                        blur_style=blur_style, mirror=mirror_on, logo_on=logo_on, logo_path=logo_path,
+                        logo_position=logo_position, logo_size=logo_size,
+                        bgm_on=bgm_on, bgm_path=bgm_path, bgm_volume=bgm_volume
+                    )
                     validate_final(edited_output)
                 st.success("Live Edit preview ready!")
                 st.video(edited_output.read_bytes())
