@@ -489,7 +489,8 @@ def render_video(video, voice, srt, output, ratio, subtitle_on, bgm_on=False,
 
 def create_live_edit_frame(video, srt, output, ratio, subtitle_on,
                            blur_on=False, blur_strength=10, blur_x=25, blur_y=25,
-                           blur_w=35, blur_h=25, blur_style="Gaussian", mirror=False):
+                           blur_w=35, blur_h=25, blur_style="Gaussian", mirror=False,
+                           preview_time=3):
     """Render one lightweight still frame so Live Edit controls can be previewed immediately."""
     vf = []
     if ratio == "9:16 · Reels/Shorts":
@@ -524,7 +525,7 @@ def create_live_edit_frame(video, srt, output, ratio, subtitle_on,
             style += ",FontName=Noto Sans Myanmar"
         graph.append(f"[{current}]subtitles='{sub}':force_style='{style}'[subtitled]")
         current = "subtitled"
-    run_cmd(["ffmpeg", "-y", "-loglevel", "error", "-ss", "3", "-i", str(video),
+    run_cmd(["ffmpeg", "-y", "-loglevel", "error", "-ss", str(max(0, float(preview_time))), "-i", str(video),
              "-filter_complex", ";".join(graph), "-map", f"[{current}]",
              "-frames:v", "1", "-q:v", "4", str(output)], timeout=120)
     return output
@@ -758,10 +759,15 @@ if job_id:
         preview_col, guide_col = st.columns([3, 2])
         with preview_col:
             st.markdown("### 🎞️ Live Preview")
-            st.caption("Blur/Subtitle/Mirror ကို ပြောင်းတိုင်း ဒီ preview ပုံက အလိုအလျောက် update ဖြစ်မယ်။")
+            st.caption("Effect controls ပြောင်းတာနဲ့ preview ပုံ update ဖြစ်မယ်။ အောက်က slider နဲ့ စမ်းကြည့်မယ့်အချိန်ကို ရွေးနိုင်ပါတယ်။")
+            preview_time = st.slider(
+                "🎞️ Preview time (seconds)", min_value=0, max_value=60, value=3, step=1,
+                key=f"{job_id}_live_preview_time",
+                help="ဗီဒီယိုထဲက ဘယ်အချိန် frame ကို စစ်ကြည့်မလဲ ရွေးပါ။"
+            )
             if input_video_path:
                 try:
-                    frame_path = job / "live_edit_frame.jpg"
+                    frame_path = job / f"live_edit_frame_{int(preview_time)}.jpg"
                     create_live_edit_frame(
                         input_video_path, edit_srt_path, frame_path, ratio,
                         st.session_state.get(f"{job_id}_edit_subtitle", True),
@@ -773,6 +779,7 @@ if job_id:
                         blur_h=st.session_state.get(f"{job_id}_blur_h", 25),
                         blur_style=st.session_state.get(f"{job_id}_blur_style", "Gaussian"),
                         mirror=st.session_state.get(f"{job_id}_edit_mirror", False),
+                        preview_time=preview_time,
                     )
                     st.image(str(frame_path), use_container_width=True)
                 except Exception as preview_error:
