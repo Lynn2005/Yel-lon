@@ -808,7 +808,27 @@ if job_id:
         with effect_c:
             bgm_on = st.toggle("🎵 Background Music ON/OFF", value=False, key=f"{job_id}_bgm_on")
 
-        if blur_on:
+        # One adjustment panel is visible at a time. Switches remain independent,
+        # so enabled effects persist even when another panel is selected.
+        adjust_options = ["📝 Text Adjust", "🌫️ Blur Adjust", "🏷️ Logo Adjust"]
+        if f"{job_id}_active_adjust_panel" not in st.session_state:
+            st.session_state[f"{job_id}_active_adjust_panel"] = "📝 Text Adjust"
+        active_adjust = st.radio(
+            "Adjust panel",
+            adjust_options,
+            horizontal=True,
+            key=f"{job_id}_active_adjust_panel",
+            label_visibility="collapsed",
+        )
+
+        if active_adjust == "📝 Text Adjust":
+            st.markdown("#### 📝 Text Adjust")
+            st.caption("စာတန်းကို ဖွင့်/ပိတ်ခြင်းနဲ့ SRT စာသားပြင်ခြင်းကို ဒီ panel မှာလုပ်ပါ။")
+            st.toggle("Show Burmese subtitles", value=True, key=f"{job_id}_edit_subtitle")
+            st.caption("အောက်က Subtitle Live Edit (SRT format) မှာ စာသားနဲ့ timestamp ကို ပြင်နိုင်ပါတယ်။")
+
+        # Keep effect state separate from the active panel: hiding a panel does not disable its effect.
+        if blur_on and active_adjust == "🌫️ Blur Adjust":
             st.markdown("#### 🌫️ Blur Adjust")
             blur_x, blur_y = st.columns(2)
             with blur_x:
@@ -821,21 +841,28 @@ if job_id:
             blur_style = st.selectbox("Blur style", ["Gaussian", "Pixelate"], key=f"{job_id}_blur_style")
             st.caption("X/Y က ဧရိယာရဲ့ ဘယ်ဘက်အပေါ်ထောင့်၊ width/height က အရွယ်အစား (%) ဖြစ်ပါတယ်။")
         else:
-            blur_left, blur_top, blur_width, blur_height = 25, 25, 35, 25
-            blur_strength, blur_style = 10, "Gaussian"
+            blur_left = st.session_state.get(f"{job_id}_blur_x", 25)
+            blur_top = st.session_state.get(f"{job_id}_blur_y", 25)
+            blur_width = st.session_state.get(f"{job_id}_blur_w", 35)
+            blur_height = st.session_state.get(f"{job_id}_blur_h", 25)
+            blur_strength = st.session_state.get(f"{job_id}_blur_strength", 10)
+            blur_style = st.session_state.get(f"{job_id}_blur_style", "Gaussian")
 
         logo_file = None
-        logo_position, logo_size = "Top right", 15
-        if logo_on:
+        logo_position = st.session_state.get(f"{job_id}_edit_logo_position", "Top right")
+        logo_size = st.session_state.get(f"{job_id}_logo_size", 15)
+        if logo_on and active_adjust == "🏷️ Logo Adjust":
             st.markdown("#### 🏷️ Logo Adjust")
             logo_position = st.selectbox("Logo position", ["Top right", "Top left", "Bottom right", "Bottom left", "Center"],
                                          key=f"{job_id}_edit_logo_position")
             logo_size = st.slider("Logo size (% of video width)", 5, 50, 15, key=f"{job_id}_logo_size")
             logo_file = st.file_uploader("Logo image (PNG/JPG)", type=["png", "jpg", "jpeg"],
                                          key=f"{job_id}_edit_logo_upload")
-
+        elif logo_on:
+            # Preserve uploaded logo and settings while its adjustment panel is hidden.
+            logo_file = st.session_state.get(f"{job_id}_edit_logo_upload")
         bgm_file = None
-        bgm_volume = 20
+        bgm_volume = st.session_state.get(f"{job_id}_bgm_volume", 20)
         if bgm_on:
             st.markdown("#### 🎵 Background Music Adjust")
             bgm_file = st.file_uploader("Background music (MP3/WAV/M4A)", type=["mp3", "wav", "m4a", "aac", "ogg"],
