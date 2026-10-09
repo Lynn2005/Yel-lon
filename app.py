@@ -824,7 +824,7 @@ if job_id:
         if active_adjust == "📝 Text Adjust":
             st.markdown("#### 📝 Text Adjust")
             st.caption("စာတန်းကို ဖွင့်/ပိတ်ခြင်းနဲ့ SRT စာသားပြင်ခြင်းကို ဒီ panel မှာလုပ်ပါ။")
-            st.toggle("Show Burmese subtitles", value=True, key=f"{job_id}_edit_subtitle")
+            st.caption("Subtitle ဖွင့်/ပိတ် control ကို အပေါ်က Effect Switches မှာထားထားပါတယ်။")
             st.caption("အောက်က Subtitle Live Edit (SRT format) မှာ စာသားနဲ့ timestamp ကို ပြင်နိုင်ပါတယ်။")
 
         # Keep effect state separate from the active panel: hiding a panel does not disable its effect.
