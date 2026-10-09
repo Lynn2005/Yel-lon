@@ -386,13 +386,27 @@ def create_timed_srt(chunks, voice_file, out, max_chars=25):
     out.write_text(make_srt(segments), encoding="utf-8")
 
 def font_path():
+    # Prefer the Myanmar fonts supplied for this project, then use system fallbacks.
+    project_fonts = Path(__file__).resolve().parent / "fonts"
     candidates = [
-        "/usr/share/fonts/truetype/noto/NotoSansMyanmar-Regular.ttf",
-        "/usr/share/fonts/truetype/noto/NotoSansMyanmar-VF.ttf",
-        "/usr/share/fonts/truetype/noto/NotoSerifMyanmar-Regular.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        project_fonts / "ဧက ၀၃ - Regular.ttf",
+        project_fonts / "ဧက ၀၈ - Regular.ttf",
+        Path("/usr/share/fonts/truetype/noto/NotoSansMyanmar-Regular.ttf"),
+        Path("/usr/share/fonts/truetype/noto/NotoSansMyanmar-VF.ttf"),
+        Path("/usr/share/fonts/truetype/noto/NotoSerifMyanmar-Regular.ttf"),
+        Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
     ]
-    return next((p for p in candidates if Path(p).exists()), None)
+    return next((str(p) for p in candidates if p.exists()), None)
+
+def subtitle_font_name():
+    path = font_path()
+    if path:
+        filename = Path(path).name
+        if filename == "ဧက ၀၃ - Regular.ttf":
+            return "A ka 03"
+        if filename == "ဧက ၀၈ - Regular.ttf":
+            return "A ka 08"
+    return "Noto Sans Myanmar"
 
 def render_video(video, voice, srt, output, ratio, subtitle_on, bgm_on=False,
                  blur_on=False, blur_strength=10, blur_x=25, blur_y=25, blur_w=35, blur_h=25,
@@ -426,7 +440,8 @@ def render_video(video, voice, srt, output, ratio, subtitle_on, bgm_on=False,
         sub = str(srt.resolve()).replace("\\", "/").replace(":", r"\\:").replace("'", r"\\'")
         style = "FontSize=18,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=58"
         if font_path():
-            style += ",FontName=Noto Sans Myanmar"
+            style += f",FontName={subtitle_font_name()}"
+            style += f",fontsdir={str(Path(font_path()).parent).replace(chr(92), chr(47))}"
         sub_filter = f"subtitles='{sub}':force_style='{style}'"
 
     graph = []
@@ -522,7 +537,8 @@ def create_live_edit_frame(video, srt, output, ratio, subtitle_on,
         sub = str(Path(srt).resolve()).replace("\\", "/").replace(":", r"\\:").replace("'", r"\\'")
         style = "FontSize=12,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=24"
         if font_path():
-            style += ",FontName=Noto Sans Myanmar"
+            style += f",FontName={subtitle_font_name()}"
+            style += f",fontsdir={str(Path(font_path()).parent).replace(chr(92), chr(47))}"
         graph.append(f"[{current}]subtitles='{sub}':force_style='{style}'[subtitled]")
         current = "subtitled"
     run_cmd(["ffmpeg", "-y", "-loglevel", "error", "-ss", str(max(0, float(preview_time))), "-i", str(video),
