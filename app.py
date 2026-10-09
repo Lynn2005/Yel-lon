@@ -487,6 +487,48 @@ def render_video(video, voice, srt, output, ratio, subtitle_on, bgm_on=False,
     args += ["-shortest", "-movflags", "+faststart", str(output)]
     run_cmd(args, timeout=7200)
 
+def create_live_edit_frame(video, srt, output, ratio, subtitle_on,
+                           blur_on=False, blur_strength=10, blur_x=25, blur_y=25,
+                           blur_w=35, blur_h=25, blur_style="Gaussian", mirror=False):
+    """Render one lightweight still frame so Live Edit controls can be previewed immediately."""
+    vf = []
+    if ratio == "9:16 · Reels/Shorts":
+        vf.append("scale=360:640:force_original_aspect_ratio=increase,crop=360:640")
+    elif ratio == "16:9 · YouTube":
+        vf.append("scale=640:360:force_original_aspect_ratio=decrease,pad=640:360:(ow-iw)/2:(oh-ih)/2")
+    elif ratio == "1:1 · Square":
+        vf.append("scale=360:360:force_original_aspect_ratio=increase,crop=360:360")
+    if mirror:
+        vf.append("hflip")
+    base_chain = ",".join(vf) if vf else "null"
+    graph = []
+    if blur_on:
+        x = max(0, min(95, int(blur_x)))
+        y = max(0, min(95, int(blur_y)))
+        w = max(5, min(100 - x, int(blur_w)))
+        h = max(5, min(100 - y, int(blur_h)))
+        strength = max(1, min(30, int(blur_strength)))
+        blur_filter = (f"scale=iw/12:ih/12:flags=neighbor,scale=iw*12:ih*12:flags=neighbor"
+                       if blur_style == "Pixelate" else f"boxblur={strength}:2")
+        graph.append(f"[0:v]{base_chain},split=2[clean][blurinput]")
+        graph.append(f"[blurinput]crop=w=iw*{w}/100:h=ih*{h}/100:x=iw*{x}/100:y=ih*{y}/100,{blur_filter}[blurred]")
+        graph.append(f"[clean][blurred]overlay=x=W*{x}/100:y=H*{y}/100:shortest=1[region]")
+        current = "region"
+    else:
+        graph.append(f"[0:v]{base_chain}[base]")
+        current = "base"
+    if subtitle_on and srt and Path(srt).exists():
+        sub = str(Path(srt).resolve()).replace("\\", "/").replace(":", r"\\:").replace("'", r"\\'")
+        style = "FontSize=12,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=24"
+        if font_path():
+            style += ",FontName=Noto Sans Myanmar"
+        graph.append(f"[{current}]subtitles='{sub}':force_style='{style}'[subtitled]")
+        current = "subtitled"
+    run_cmd(["ffmpeg", "-y", "-loglevel", "error", "-ss", "3", "-i", str(video),
+             "-filter_complex", ";".join(graph), "-map", f"[{current}]",
+             "-frames:v", "1", "-q:v", "4", str(output)], timeout=120)
+    return output
+
 def validate_final(path):
     if not path.exists() or path.stat().st_size <= 0:
         raise RuntimeError("Final rendering failed.")
@@ -715,13 +757,29 @@ if job_id:
         input_video_path = next((p for p in job.iterdir() if p.name.startswith("input") and p.is_file()), None)
         preview_col, guide_col = st.columns([3, 2])
         with preview_col:
-            st.markdown("### 🎞️ Editing Preview")
+            st.markdown("### 🎞️ Live Preview")
+            st.caption("Blur/Subtitle/Mirror ကို ပြောင်းတိုင်း ဒီ preview ပုံက အလိုအလျောက် update ဖြစ်မယ်။")
             if input_video_path:
-                st.video(input_video_path.read_bytes())
-            elif final_path.exists():
-                st.video(final_path.read_bytes())
+                try:
+                    frame_path = job / "live_edit_frame.jpg"
+                    create_live_edit_frame(
+                        input_video_path, edit_srt_path, frame_path, ratio,
+                        st.session_state.get(f"{job_id}_edit_subtitle", True),
+                        blur_on=st.session_state.get(f"{job_id}_blur_on", False),
+                        blur_strength=st.session_state.get(f"{job_id}_blur_strength", 10),
+                        blur_x=st.session_state.get(f"{job_id}_blur_x", 25),
+                        blur_y=st.session_state.get(f"{job_id}_blur_y", 25),
+                        blur_w=st.session_state.get(f"{job_id}_blur_w", 35),
+                        blur_h=st.session_state.get(f"{job_id}_blur_h", 25),
+                        blur_style=st.session_state.get(f"{job_id}_blur_style", "Gaussian"),
+                        mirror=st.session_state.get(f"{job_id}_edit_mirror", False),
+                    )
+                    st.image(str(frame_path), use_container_width=True)
+                except Exception as preview_error:
+                    st.warning("Live still preview မထုတ်နိုင်သေးပါ။ Apply edits နှိပ်ပြီး full preview စမ်းနိုင်ပါတယ်။")
+                    st.caption(str(preview_error)[:300])
         with guide_col:
-            st.info("Blur X/Y နဲ့ Width/Height ကို မူရင်းစာတန်းရှိတဲ့နေရာအတိုင်း ချိန်ပါ။ **Apply edits & render preview** နှိပ်ပြီး ပြင်ထားတဲ့ဗီဒီယိုကို အောက်မှာကြည့်နိုင်ပါတယ်။")
+            st.info("မူရင်းစာတန်းရှိတဲ့နေရာကို Blur X/Y နဲ့ Width/Height ချိန်ပါ။ မြန်မာစာတန်းကို Blur မဖြစ်ဘဲ အပေါ်မှာ ထပ်တင်ထားတာကို preview မှာကြည့်ပါ။ နောက်ဆုံးဗီဒီယိုအတွက် **Apply edits & render preview** ကိုနှိပ်ပါ။")
         if edit_srt_path.exists():
             current_srt = edit_srt_path.read_text(encoding="utf-8")
             edited_srt_text = st.text_area(
